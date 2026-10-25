@@ -989,7 +989,8 @@ async function showDiff(ids, title) {
     vscode.window.showInformationMessage(`${title}: no changes against ${bases.join(', ')}`);
     return;
   }
-  const source = vscode.Uri.from({ scheme: 'hangar-diff', path: '/' + [...ids].sort().join(',') });
+  // The worktrees' paths start with a slash, which a URI path can't take twice: a hash of them names it
+  const source = vscode.Uri.from({ scheme: 'hangar-diff', path: `/${crypto.createHash('sha1').update([...ids].sort().join('\n')).digest('hex')}` });
   // Open diffs are told apart by their tab's title (the only thing a tab shows of it), so a different
   // diff that would get the same title (say two different "3 tickets") gets a number
   const key = source.toString();

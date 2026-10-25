@@ -182,6 +182,24 @@ function draftFor(branch) {
   return claim.ticket;
 }
 
+// Puts `branch` under `ticket` whatever it's called: its Claude reporting a worktree it made (the
+// added link), or Move to ticket… on a worktree. Kept in the ticket's draft record like an adopted
+// branch, so it holds while the branch has worktrees.
+function claimBranch(ticket, branch) {
+  if (!ticket || !branch) return;
+  for (const d of Object.values(drafts)) {
+    // A branch belongs to one ticket: another ticket that had claimed it lets go
+    if (d.ticket !== ticket && d.branch === branch && d.adopted) { try { fs.unlinkSync(draftFile(d.ticket)); } catch {} delete drafts[d.ticket]; }
+  }
+  if (ticketOf(branch) === ticket && !Object.values(drafts).some((d) => d.branch === branch)) return;
+  const d = { ...(drafts[ticket] || { ticket, root: rootOf(ticket), at: Math.floor(Date.now() / 1000) }), branch, adopted: true };
+  fs.mkdirSync(DRAFTS_DIR, { recursive: true });
+  writeJson(draftFile(ticket), d);
+  drafts[ticket] = d;
+  for (const w of worktrees.values()) if (w.branch === branch) w.ticket = ticket;
+  ticketsMemo = null;
+}
+
 async function localStatus(wt) {
   const status = await git(wt.dir, ['status', '--porcelain=v1']).catch(() => '');
   let ahead = null;
@@ -476,14 +494,17 @@ function since(seconds) {
   return `${Math.round(s / 86400)} d ago`;
 }
 
-// Each ticket gets its own color for its icons and label in this panel, and for its worktree
-// folders in the Explorer (tree rows can't have backgrounds). A new ticket takes the least-used
-// color at the time and keeps it, so colors never shift as tickets come and go.
+// Each ticket and chat gets its own color for its icon and label in this panel (and in the menu bar),
+// and a ticket for its worktree folders in the Explorer (tree rows can't have backgrounds). A new one
+// takes the least-used color at the time and keeps it, so colors never shift as others come and go.
 const PALETTE = ['charts.blue', 'charts.orange', 'charts.purple', 'charts.green', 'charts.yellow',
   'terminal.ansiCyan', 'terminal.ansiMagenta'];
+// The same colors for the menu bar, which has no theme: the editor's defaults, light then dark
+const PALETTE_HEX = ['#1a85ff,#3794ff', '#d18616,#d18616', '#652d90,#b180d7', '#388a34,#89d185', '#bf8803,#cca700',
+  '#0598bc,#11a8cd', '#bc05bc,#bc3fbc'];
 let colorOf = {};
 function assignColors() {
-  const names = tickets().map((t) => t.name);
+  const names = [...tickets().map((t) => t.name), ...Object.values(chats).map((c) => `chat:${c.id}`)];
   const next = Object.fromEntries(Object.entries(colorOf).filter(([n]) => names.includes(n)));
   for (const name of names) {
     if (next[name] != null) continue;
@@ -662,7 +683,8 @@ class Tree {
     item.id = `chat:${c.id}`;
     item.contextValue = running ? 'chat.live' : 'chat.stopped';
     item.description = active ? '● here' : '';
-    item.iconPath = new vscode.ThemeIcon('comment-discussion');
+    item.resourceUri = ticketUri(name);
+    item.iconPath = new vscode.ThemeIcon('comment-discussion', ticketColor(name));
     item.tooltip = `${running ? 'Show this chat' : 'Open this chat again (resumes the conversation)'}\n${chatCwd(c).replace(HOME, '~')}`;
     item.command = { command: 'hangar.openTicket', title: 'Open chat', arguments: [{ kind: 'chat', name }] };
     return item;
@@ -889,16 +911,18 @@ function claudePrompt(name) {
   let facts;
   if (t?.worktrees.length) {
     lines.push("This session is for the `ticket` below. Do all reading and editing for it in its `worktrees`, not in the repos' own checkouts.");
-    lines.push(`If it needs another of the \`repos\`, create a worktree for it on the same branch as its worktrees with \`${addRepoCommand()}\`, ${FILL_IN} (it then shows up in the user's Hangar).`);
+    lines.push(`If it needs another of the \`repos\`, create a worktree for it on the same branch as its worktrees with \`${addRepoCommand()}\`, ${FILL_IN}.`);
     facts = { ticket: name, worktrees: t.worktrees.map((w) => ({ repo: w.repo, dir: w.dir, branch: w.branch })), repos };
   } else {
     const planned = drafts[name]?.branch;
     lines.push("This session is for the `ticket` below. It has no worktrees yet: nobody knows which repos it touches. Work it out from the `root` (read the repos to explore, but don't edit their own checkouts).");
     lines.push(planned
-      ? `Its branch is the \`branch\` below. For each repo the change needs, create a worktree on it with \`${addRepoCommand()}\`, ${FILL_IN}, and do all editing in those worktrees.`
+      ? `Its branch is the \`branch\` below: use exactly that name, even if the conversation suggests another. For each repo the change needs, create a worktree on it with \`${addRepoCommand()}\`, ${FILL_IN}, and do all editing in those worktrees.`
       : `Once you know what it touches, pick one branch name that follows the repo's conventions and includes the ticket ID, and for each repo the change needs create a worktree on it with \`${addRepoCommand()}\`, filling in the repo's \`dir\` and that branch, each shell-quoted; use the same branch in every repo and do all editing in those worktrees.`);
     facts = { ticket: name, root, ...(planned ? { branch: planned } : {}), repos };
   }
+  // Whatever the branch ends up called, this is what puts its worktrees under the ticket
+  lines.push(`Each time you create a worktree, then run \`open ${shq(`${link('added')}&branch=<branch>`)}\` with its branch URL-encoded in place of <branch>, so it shows under this ticket in the user's Hangar.`);
   lines.push(`To show the user this ticket's changes, run \`open ${shq(link('diff'))}\`: it opens the diff in their Hangar window.`);
   lines.push(promptFacts(facts));
   return lines.join('\n\n');
@@ -1297,6 +1321,23 @@ async function moveChat(id, name, v, a) {
   return true;
 }
 
+// A worktree Hangar filed under the wrong ticket (its Claude picked a branch that doesn't carry the
+// ticket's name): Move to ticket… puts its branch, in every repo that has it, under the right one
+async function moveWorktree(w) {
+  const others = tickets().filter((t) => t.name !== w.ticket);
+  if (!others.length) {
+    vscode.window.showInformationMessage('There’s no other ticket to move it to.');
+    return;
+  }
+  const pick = await vscode.window.showQuickPick(others.map((t) => ({
+    label: t.name, description: t.draft ? 'no repos yet' : t.worktrees.map((x) => x.repo).join(', '),
+  })), { placeHolder: `Move ${w.branch} (in every repo that has it) to ticket…` });
+  if (!pick) return;
+  claimBranch(pick.label, w.branch);
+  await poll();
+  tree.refresh();
+}
+
 async function forgetDraft(name) {
   const ok = await vscode.window.showWarningMessage(`Forget ${name}? It has no worktrees yet.`, { modal: true }, 'Forget');
   if (ok !== 'Forget') return;
@@ -1400,8 +1441,10 @@ async function handleRequests() {
       if (!exists) continue;
       if (!req.trusted && !(await confirmLink(req))) continue;
       if (req.action === 'open') await openTicket(req.ticket);
-      // A ticket's Claude added a repo: show it if the window is on that ticket, never switch
+      // A ticket's Claude added a repo: its branch is the ticket's, whatever it's called; show it if the
+      // window is on that ticket, never switch
       if (req.action === 'added') {
+        if (req.trusted && req.branch && checkBranch(req.branch) === undefined) claimBranch(req.ticket, req.branch);
         await poll();
         if (req.ticket === activeTicket) await openTicket(req.ticket, { showClaude: false });
       }
@@ -1445,16 +1488,19 @@ async function confirmLink(req) {
 }
 
 // <scheme>://<publisher>.hangar/{open,diff}?ticket=…[&key=…]: how Claude shows you the diff and the
-// menu bar opens a chat or ticket. A link that lands in another editor window is passed on to the
+// menu bar opens a chat or ticket. …/added?ticket=…&branch=…&key=…: a ticket's Claude made a worktree. A link that lands in another editor window is passed on to the
 // Hangar window through the requests folder.
 const linkHandler = {
   handleUri(uri) {
     const action = uri.path.replace(/^\//, '');
     const query = new URLSearchParams(uri.query);
     const ticket = query.get('ticket');
-    if (!ticket || !['open', 'diff'].includes(action)) return;
+    if (!ticket || !['open', 'diff', 'added'].includes(action)) return;
+    const trusted = hasLinkKey(query.get('key'));
+    // Only a ticket's own Claude says which branch is the ticket's: never a link from outside
+    if (action === 'added' && !trusted) return;
     fs.mkdirSync(REQUESTS_DIR, { recursive: true });
-    writeJson(path.join(REQUESTS_DIR, `${Date.now()}-${process.pid}.json`), { action, ticket, trusted: hasLinkKey(query.get('key')) });
+    writeJson(path.join(REQUESTS_DIR, `${Date.now()}-${process.pid}.json`), { action, ticket, branch: query.get('branch') || undefined, trusted });
     handleRequests();
   },
 };
@@ -1485,9 +1531,10 @@ function writeStatus() {
       workspace: WORKSPACE_FILE,
       active: activeTicket,
       running: names.filter((n) => claudeTerminalFor(n)),
-      chats: Object.values(chats).map((c) => ({ name: `chat:${c.id}`, title: c.title || 'New chat', folder: projectName(chatCwd(c)), at: c.at || 0 })),
+      chats: Object.values(chats).map((c) => ({ name: `chat:${c.id}`, title: c.title || 'New chat', folder: projectName(chatCwd(c)), at: c.at || 0,
+        color: PALETTE_HEX[colorOf[`chat:${c.id}`] ?? 0] })),
       tickets: tickets().map((t) => ({
-        name: t.name, draft: !!t.draft, folder: projectName(t.root), ci: worstChecks(t.worktrees), repos: t.worktrees.map((w) => w.repo),
+        name: t.name, color: PALETTE_HEX[colorOf[t.name] ?? 0], draft: !!t.draft, folder: projectName(t.root), ci: worstChecks(t.worktrees), repos: t.worktrees.map((w) => w.repo),
         prs: t.worktrees.filter((w) => w.pr).map((w) => ({ repo: w.repo, number: w.pr.number, state: w.pr.state, url: w.pr.url, checks: w.pr.checks, review: w.pr.review })),
       })),
     });
@@ -1743,6 +1790,7 @@ function activate(ctx) {
     vscode.commands.registerCommand('hangar.copyBranch', (el) => { const w = worktreeOf(el); if (w) return copy(w.branch, 'branch name'); }),
     vscode.commands.registerCommand('hangar.copyPath', (el) => { const w = worktreeOf(el); if (w) return copy(w.dir, 'worktree path'); }),
     vscode.commands.registerCommand('hangar.copyPRLink', (el) => { const w = worktreeOf(el); if (w?.pr?.url) return copy(w.pr.url, 'PR link'); }),
+    vscode.commands.registerCommand('hangar.moveWorktree', (el) => { const w = worktreeOf(el); if (w) return moveWorktree(w); }),
     vscode.commands.registerCommand('hangar.removeWorktree', (el) => {
       const w = worktrees.get(el.id);
       if (w) return removeWorktree(w);

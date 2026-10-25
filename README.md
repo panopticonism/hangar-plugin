@@ -3,7 +3,7 @@
 Claude Code chats and tickets in the editor's sidebar, each with its own Claude, and every git worktree under the root folder grouped by ticket, with its branch, PR and CI. One window switches between them, and diffs open in the editor's multi-file diff with the working side live.
 
 - **Chats**: Claude in a folder with no ticket or branch. When a chat grows into real work, *Turn it into a ticket thread* keeps the conversation and gives it worktrees. A chat that ran in a folder inside its project has its conversation moved to the project's history, where the ticket's Claude runs.
-- **Tickets**: Claude at the root plus a worktree per repo it touches, all on one branch. Worktrees are found from git itself, wherever they live.
+- **Tickets**: Claude at the root plus a worktree per repo it touches, all on one branch. Worktrees are found from git itself, wherever they live, and filed under the ticket their branch names (`bug/abc-123-…` → ABC-123), the ticket that was started with that branch, or the ticket whose Claude reported making it. One filed under the wrong ticket can be moved with *Move to ticket…*.
 
 Works in VSCodium, Cursor and VS Code, **on macOS**. Other systems aren't supported yet.
 
@@ -36,7 +36,7 @@ The menu bar shows the hangar, how many Claudes are waiting on you or working, a
 
 ## Links
 
-`<scheme>://panopticonism.hangar/open?ticket=…` opens a chat or ticket in the Hangar window, and `…/diff?ticket=…` shows a ticket's changes: Claude uses the second to show you its work, and the menu bar the first. Since any web page or app can open such a link, the Hangar's own links carry a key kept in `~/.local/share/hangar/link-key` (readable only by you); a link without it asks before it switches the window or starts a Claude.
+`<scheme>://panopticonism.hangar/open?ticket=…` opens a chat or ticket in the Hangar window, `…/diff?ticket=…` shows a ticket's changes, and `…/added?ticket=…&branch=…` files a branch under a ticket: Claude uses the last two to show you its work and report the worktrees it makes, and the menu bar the first. Since any web page or app can open such a link, the Hangar's own links carry a key kept in `~/.local/share/hangar/link-key` (readable only by you); a link without it asks before it switches the window or starts a Claude, and an `added` link without it is ignored.
 
 ## What Claude is told
 

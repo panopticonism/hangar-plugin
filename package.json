@@ -131,6 +131,11 @@
 				"icon": "$(github)"
 			},
 			{
+				"command": "hangar.moveWorktree",
+				"title": "Move to ticket…",
+				"category": "Hangar"
+			},
+			{
 				"command": "hangar.removeWorktree",
 				"title": "Remove merged worktree",
 				"category": "Hangar",
@@ -380,6 +385,11 @@
 					"group": "3_copy@2"
 				},
 				{
+					"command": "hangar.moveWorktree",
+					"when": "view == hangar.panel && viewItem =~ /^(worktree(\\.pr)?(\\.removable)?|branch)$/",
+					"group": "5_move@1"
+				},
+				{
 					"command": "hangar.removeWorktree",
 					"when": "view == hangar.panel && viewItem =~ /\\.removable/",
 					"group": "9_remove@1"
@@ -500,6 +510,10 @@
 				},
 				{
 					"command": "hangar.removeProject",
+					"when": "false"
+				},
+				{
+					"command": "hangar.moveWorktree",
 					"when": "false"
 				}
 			]

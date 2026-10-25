@@ -64,8 +64,8 @@ try { key = fs.readFileSync(path.join(HOME, '.local/share/hangar/link-key'), 'ut
 const link = (name) => `${scheme}://${extension}/open?ticket=${encodeURIComponent(name)}${key ? `&key=${key}` : ''}`;
 
 const items = [
-  ...chats.map((c) => ({ name: c.name, label: clean(c.title), note: c.folder, chat: true })),
-  ...tickets.map((t) => ({ name: t.name, label: clean(t.name), note: t.draft ? 'no repos yet' : t.repos.join(', '), ticket: t })),
+  ...chats.map((c) => ({ name: c.name, label: clean(c.title), note: c.folder, chat: true, color: c.color })),
+  ...tickets.map((t) => ({ name: t.name, label: clean(t.name), note: t.draft ? 'no repos yet' : t.repos.join(', '), ticket: t, color: t.color })),
 ].map((it) => ({ ...it, state: stateOf(it.name), at: agents[it.name]?.at || 0 }));
 items.sort((a, b) => b.at - a.at);
 
@@ -84,8 +84,9 @@ const out = [`${title}|${icon}${needs ? ' color=#b08800,#e3b341' : ''}`, '---'];
 const row = (it) => {
   const ci = it.ticket?.ci === 'fail' ? ' ✗ CI failed' : '';
   const when = it.state === 'needs-input' || it.state === 'working' ? ` · ${since(it.at)}` : '';
-  const icon = it.chat ? 'bubble.left' : 'tag';
-  out.push(`${it.label}${it.note ? `${DIM}  ${clean(it.note)}${RESET}` : ''}${ci}${when} | href=${link(it.name)} sfimage=${icon} ansi=true${ci ? ' color=#cf222e,#ff7b72' : ''}`);
+  // Its icon in the chat's or ticket's own color, the one it has in the Hangar panel
+  const icon = `sfimage=${it.chat ? 'bubble.left.fill' : 'tag.fill'}${/^#[0-9a-f]{6},#[0-9a-f]{6}$/i.test(it.color || '') ? ` sfcolor=${it.color}` : ''}`;
+  out.push(`${it.label}${it.note ? `${DIM}  ${clean(it.note)}${RESET}` : ''}${ci}${when} | href=${link(it.name)} ${icon} ansi=true${ci ? ' color=#cf222e,#ff7b72' : ''}`);
   for (const pr of it.ticket?.prs || []) {
     const checks = { pass: 'CI passed', fail: 'CI failed', pending: 'CI running', none: '' }[pr.checks] || '';
     out.push(`--${clean(pr.repo)}: PR #${pr.number} ${String(pr.state).toLowerCase()}${checks && ['OPEN', 'DRAFT'].includes(pr.state) ? ` · ${checks}` : ''} | href=${pr.url}`);

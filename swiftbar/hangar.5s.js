@@ -30,9 +30,14 @@ let dark = false;
 try { dark = execFileSync('/usr/bin/defaults', ['read', '-g', 'AppleInterfaceStyle'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() === 'Dark'; } catch {}
 const pick = (pair) => String(pair).split(',')[dark ? 1 : 0] || String(pair).split(',')[0];
 
-// Each chat's and ticket's mark in its color: a dot for a chat, a rounded square for a ticket. SwiftBar
-// recolors SF Symbols in menus to the text color, but shows an image as it is, so the script draws
-// one: a 32-pixel PNG at 144 dpi (16 points, sharp on Retina), edges smoothed.
+// Each chat's and ticket's icon in its color: the same icons as in the Hangar panel (Codicons'
+// comment-discussion and tag, by Microsoft, CC BY 4.0), as 32x32 coverage masks. SwiftBar recolors SF
+// Symbols in menus to the text color but shows an image as it is, so the script fills a mask with the
+// color and writes it as a 32-pixel PNG at 144 dpi (16 points, sharp on Retina).
+const GLYPHS = {
+  chat: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAjaouLi4uLi4uLi4uLi4uLi4uKaSUAAAAAAAAAAAAAZff/////////////////////////+W8AAAAAAAAAADb8///++fn5+fn5+fn5+fn5+fn5/v///kEAAAAAAAAAmP//pRwAAAAAAAAAAAAAAAAAAAAenf//pgAAAAAAAADC//kVAAAAAAAAAAAAAAAAAAAAAAAN8//PAAAAAAAAAMb/2gAAAAAAAAAAAAAAAAAAAAAAAADM/9MAAAAAAAAAxv/aAAAAAAAAAAAAAAAAAAAAAAAAAMz/0wAAAAAAAADG/9oAAAAAAAAAAAAAAAAAAAAAAAAAzP/TAAAAAAAAAMb/2gAAAAAAAAAAAAAAAAAAAAAAAADM/9MAAAAAAAAAxv/aAAAAAAAAAAAAAAAAAAAAAAAAAMz/0wAAAAAAAADG/9oAAAAAAAAAAAAAGH2foKCgoKCg///vn3sVAAAAAMb/2gAAAAAAAAAAACDq/////////////////+UaAAAAxv/aAAAAAAAAAAAAov///////////////////5YAAADG/9oAAAAAAAAAAADQ//AdAAAAAAAAAAAAH+v/wgAAAMb/6QIAAAAAAAAAANP/zAAAAAAAAAAAAAAAv//GAAAArv//VgAAAAAAAAAA0//MAAAAAAAAAAAAAAC//8UAAABt///+sItZAAAAAFnr/8wAAAAAAAAAAAAAAL//xgAAAATG/////8wAABCo////zAAAAAAAAAAAAAAAv//GAAAAAAiI1///zAA/4v/////MAAAAAAAAAAAAAAC//8YAAAAAAAAA0//Shv3//+r//9wAAAAAAAAAAAAAANH/xgAAAAAAAADT//////+9Gbv//7eZmZmYQQBBmJm4//+vAAAAAAAAAKD////7ewIAWf/////////4Tcb//////1IAAAAAAAAAJMP/yDoAAAAAaeT////////6/////+NqAAAAAAAAAAAAAAkAAAAAAAAAAAYGBgyy/////9QFAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWs////0wAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAASm///TAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAKe948AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==',
+  tag: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAFUoCLi4uLi4uNdi8AAAAAAAAAAAAAAAAAAAAAAAAAJtD//////////////HcAAAAAAAAAAAAAAAAAAAAAACjn////+/n5+fn5/v///kEAAAAAAAAAAAAAAAAAAAAo5///4lYDAAAAAAAcmP//nAAAAAAAAAAAAAAAAAAAKOf//+AhAAAAA1CVTQMK8P+8AAAAAAAAAAAAAAAAACjn///fIAAAAABs////bADK/78AAAAAAAAAAAAAAAAo5///3R4AAAAAAMP////DAM7/vwAAAAAAAAAAAAAAKOf//9wdAAAAAAAAn////5sA0v+/AAAAAAAAAAAAACjn///aHAAAAAAAAAAuyf/BJwDW/78AAAAAAAAAAAAo5///2RoAAAAAAAAAAAAAAQAAANr/vwAAAAAAAAAAKOf//9cZAAAAAAAAAAAAAAAAAAAA3v+/AAAAAAAAABLg///WGAAAAAAAAAAAAAAAAAAAAA/3/74AAAAAAAAAiP//1BYAAAAAAAAAAAAAAAAAAAAAfP//ngAAAAAAAADE//8xAAAAAAAAAAAAAAAAAAAAAGz///9HAAAAAAAAAMT//xcAAAAAAAAAAAAAAAAAAABu////iQAAAAAAAAAAkf//pgIAAAAAAAAAAAAAAAAAcf///5AAAAAAAAAAAAAl9f//pAMAAAAAAAAAAAAAAHT///+QAAAAAAAAAAAAAABY/f//pwMAAAAAAAAAAAB3////kAAAAAAAAAAAAAAAAABe/f//qgQAAAAAAAAAef///5AAAAAAAAAAAAAAAAAAAABi/v//rgUAAAAAAHz///+QAAAAAAAAAAAAAAAAAAAAAABl/v//sQYAAAB/////kAAAAAAAAAAAAAAAAAAAAAAAAABp////tA4Ehf///5AAAAAAAAAAAAAAAAAAAAAAAAAAAABt////8un///+QAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABx/v//////jwAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABFzPr81VgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABQYAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==',
+};
 const CRC = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
 const crc32 = (buf) => { let c = 0xffffffff; for (const b of buf) c = CRC[(c ^ b) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
 function pngChunk(type, data) {
@@ -42,28 +47,16 @@ function pngChunk(type, data) {
   return Buffer.concat([len, body, crc]);
 }
 const marks = new Map();
-function mark(hex, shape) {
-  const key = hex + shape;
+function mark(hex, glyph) {
+  const key = hex + glyph;
   if (marks.has(key)) return marks.get(key);
   const size = 32;
   const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  const coverage = Buffer.from(GLYPHS[glyph], 'base64');
   const rows = [];
   for (let y = 0; y < size; y++) {
     const row = Buffer.alloc(1 + size * 4); // filter byte 0, then RGBA
-    for (let x = 0; x < size; x++) {
-      const dx = x + 0.5 - size / 2;
-      const dy = y + 0.5 - size / 2;
-      // Signed distance to the shape's edge: a circle of radius 9, or a 18-wide square with corners of 4
-      let d;
-      if (shape === 'dot') d = Math.hypot(dx, dy) - 9;
-      else {
-        const qx = Math.abs(dx) - 9 + 4;
-        const qy = Math.abs(dy) - 9 + 4;
-        d = Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - 4;
-      }
-      const alpha = Math.round(255 * Math.min(1, Math.max(0, 0.5 - d)));
-      row.set([r, g, b, alpha], 1 + x * 4);
-    }
+    for (let x = 0; x < size; x++) row.set([r, g, b, coverage[y * size + x]], 1 + x * 4);
     rows.push(row);
   }
   const ihdr = Buffer.alloc(13);
@@ -141,7 +134,7 @@ const row = (it) => {
   const when = it.state === 'needs-input' || it.state === 'working' ? ` · ${since(it.at)}` : '';
   // Its icon in the chat's or ticket's own color, the one it has in the Hangar panel
   const icon = /^#[0-9a-f]{6},#[0-9a-f]{6}$/i.test(it.color || '')
-    ? `image=${mark(pick(it.color), it.chat ? 'dot' : 'square')}`
+    ? `image=${mark(pick(it.color), it.chat ? 'chat' : 'tag')}`
     : `sfimage=${it.chat ? 'bubble.left' : 'tag'}`;
   out.push(`${it.label}${it.note ? `${DIM}  ${clean(it.note)}${RESET}` : ''}${ci}${when} | href=${link(it.name)} ${icon} ansi=true${ci ? ` color=${pick('#cf222e,#ff7b72')}` : ''}`);
   for (const pr of it.ticket?.prs || []) {

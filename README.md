@@ -59,3 +59,7 @@ Each Claude starts with a short note on its chat or ticket, appended to its syst
 | Your repos | Worktrees, created and removed only when you ask (*Add repo to ticket…*, *Remove merged worktree*) or by Claude for its ticket. |
 
 It sends nothing anywhere itself: network access is `git fetch` and `gh`, with your own credentials.
+
+## Credits
+
+The menu bar draws the chat and ticket icons from [Codicons](https://github.com/microsoft/vscode-codicons) by Microsoft, licensed [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).

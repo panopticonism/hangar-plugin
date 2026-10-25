@@ -1,0 +1,520 @@
+{
+	"name": "hangar",
+	"displayName": "Hangar",
+	"description": "Claude Code chats and tickets in your sidebar, each with its own Claude, every git worktree grouped by ticket with its branch, PR and CI, one window that switches between them, and live multi-file diffs. macOS.",
+	"version": "3.0.0",
+	"publisher": "panopticonism",
+	"license": "MIT",
+	"repository": {
+		"type": "git",
+		"url": "https://github.com/panopticonism/hangar-plugin.git"
+	},
+	"bugs": {
+		"url": "https://github.com/panopticonism/hangar-plugin/issues"
+	},
+	"homepage": "https://github.com/panopticonism/hangar-plugin#readme",
+	"icon": "media/icon.png",
+	"keywords": [
+		"claude",
+		"claude code",
+		"worktree",
+		"git worktree",
+		"tickets",
+		"pull requests",
+		"agents"
+	],
+	"engines": {
+		"vscode": "^1.90.0"
+	},
+	"categories": [
+		"AI",
+		"SCM Providers",
+		"Other"
+	],
+	"main": "./extension.js",
+	"files": [
+		"extension.js",
+		"agent-hook.js",
+		"swiftbar/hangar.5s.js",
+		"media/hangar.svg",
+		"media/icon.png",
+		"media/menubar.png",
+		"README.md",
+		"CHANGELOG.md",
+		"LICENSE"
+	],
+	"activationEvents": [
+		"onStartupFinished",
+		"onUri"
+	],
+	"contributes": {
+		"configuration": {
+			"title": "Hangar",
+			"properties": {
+				"hangar.root": {
+					"type": "string",
+					"default": "",
+					"description": "The folder whose repos and worktrees the Hangar shows, and where each Claude starts: a repo, a folder of repos, or a meta-repo. Empty: the window's first folder."
+				},
+				"hangar.roots": {
+					"type": "array",
+					"items": {
+						"type": "string"
+					},
+					"default": [],
+					"description": "More projects for the Hangar besides the window's own folder: each a repo, a folder of repos, or a meta-repo. Projects added with Add project… are kept separately."
+				},
+				"hangar.showOnStartup": {
+					"type": "boolean",
+					"default": true,
+					"description": "Show the Hangar in the sidebar when the Hangar window opens."
+				},
+				"hangar.menuBar": {
+					"type": "boolean",
+					"default": false,
+					"markdownDescription": "Show the Hangar in the Mac menu bar: what each Claude is doing and failing CI. Needs [SwiftBar](https://swiftbar.app); turning this on puts a script in SwiftBar's plugin folder, and turning it off takes it out again."
+				}
+			}
+		},
+		"viewsContainers": {
+			"activitybar": [
+				{
+					"id": "hangar",
+					"title": "Hangar",
+					"icon": "media/hangar.svg"
+				}
+			]
+		},
+		"views": {
+			"hangar": [
+				{
+					"id": "hangar.panel",
+					"name": "Hangar"
+				}
+			]
+		},
+		"commands": [
+			{
+				"command": "hangar.refresh",
+				"title": "Refresh",
+				"category": "Hangar",
+				"icon": "$(refresh)"
+			},
+			{
+				"command": "hangar.openTicket",
+				"title": "Open ticket or chat…",
+				"category": "Hangar",
+				"icon": "$(arrow-right)"
+			},
+			{
+				"command": "hangar.diffTicket",
+				"title": "Diff ticket",
+				"category": "Hangar",
+				"icon": "$(diff-multiple)"
+			},
+			{
+				"command": "hangar.diffWorktree",
+				"title": "Diff branch",
+				"category": "Hangar",
+				"icon": "$(diff)"
+			},
+			{
+				"command": "hangar.claude",
+				"title": "Show Claude",
+				"category": "Hangar",
+				"icon": "$(terminal)"
+			},
+			{
+				"command": "hangar.openPR",
+				"title": "Open PR on GitHub",
+				"category": "Hangar",
+				"icon": "$(github)"
+			},
+			{
+				"command": "hangar.removeWorktree",
+				"title": "Remove merged worktree",
+				"category": "Hangar",
+				"icon": "$(trash)"
+			},
+			{
+				"command": "hangar.newTicket",
+				"title": "New ticket…",
+				"category": "Hangar",
+				"icon": "$(add)"
+			},
+			{
+				"command": "hangar.addRepo",
+				"title": "Add repo to ticket…",
+				"category": "Hangar",
+				"icon": "$(repo-forked)"
+			},
+			{
+				"command": "hangar.diffActive",
+				"title": "Diff current ticket",
+				"category": "Hangar",
+				"icon": "$(diff-multiple)"
+			},
+			{
+				"command": "hangar.forgetDraft",
+				"title": "Forget ticket",
+				"category": "Hangar",
+				"icon": "$(close)"
+			},
+			{
+				"command": "hangar.newChat",
+				"title": "New chat",
+				"category": "Hangar",
+				"icon": "$(comment-discussion)"
+			},
+			{
+				"command": "hangar.promoteChat",
+				"title": "Turn it into a ticket thread",
+				"category": "Hangar",
+				"icon": "$(tag)"
+			},
+			{
+				"command": "hangar.forgetChat",
+				"title": "Remove chat",
+				"category": "Hangar",
+				"icon": "$(close)"
+			},
+			{
+				"command": "hangar.stopClaude",
+				"title": "Stop (interrupt Claude)",
+				"category": "Hangar",
+				"icon": "$(debug-stop)"
+			},
+			{
+				"command": "hangar.closeClaude",
+				"title": "Close Claude (keeps the conversation)",
+				"category": "Hangar",
+				"icon": "$(close)"
+			},
+			{
+				"command": "hangar.revealWorktree",
+				"title": "Reveal in Finder",
+				"category": "Hangar",
+				"icon": "$(folder-opened)"
+			},
+			{
+				"command": "hangar.terminalInWorktree",
+				"title": "Open terminal in worktree",
+				"category": "Hangar",
+				"icon": "$(terminal)"
+			},
+			{
+				"command": "hangar.copyBranch",
+				"title": "Copy branch name",
+				"category": "Hangar",
+				"icon": "$(copy)"
+			},
+			{
+				"command": "hangar.copyPath",
+				"title": "Copy worktree path",
+				"category": "Hangar",
+				"icon": "$(copy)"
+			},
+			{
+				"command": "hangar.copyPRLink",
+				"title": "Copy PR link",
+				"category": "Hangar",
+				"icon": "$(link)"
+			},
+			{
+				"command": "hangar.openThisTicket",
+				"title": "Open ticket",
+				"category": "Hangar",
+				"icon": "$(arrow-right)"
+			},
+			{
+				"command": "hangar.openThisChat",
+				"title": "Open chat",
+				"category": "Hangar",
+				"icon": "$(arrow-right)"
+			},
+			{
+				"command": "hangar.setupHooks",
+				"title": "Turn on agent status",
+				"category": "Hangar"
+			},
+			{
+				"command": "hangar.addProject",
+				"title": "Add project…",
+				"category": "Hangar",
+				"icon": "$(new-folder)"
+			},
+			{
+				"command": "hangar.removeProject",
+				"title": "Remove project from the Hangar",
+				"category": "Hangar",
+				"icon": "$(close)"
+			}
+		],
+		"menus": {
+			"view/title": [
+				{
+					"command": "hangar.newTicket",
+					"when": "view == hangar.panel",
+					"group": "navigation@1"
+				},
+				{
+					"command": "hangar.newChat",
+					"when": "view == hangar.panel",
+					"group": "navigation@2"
+				},
+				{
+					"command": "hangar.refresh",
+					"when": "view == hangar.panel",
+					"group": "navigation@3"
+				},
+				{
+					"command": "hangar.addProject",
+					"when": "view == hangar.panel",
+					"group": "navigation@4"
+				}
+			],
+			"view/item/context": [
+				{
+					"command": "hangar.diffTicket",
+					"when": "view == hangar.panel && viewItem == ticket",
+					"group": "inline@1"
+				},
+				{
+					"command": "hangar.addRepo",
+					"when": "view == hangar.panel && (viewItem == ticket || viewItem == ticket.draft)",
+					"group": "inline@2"
+				},
+				{
+					"command": "hangar.forgetDraft",
+					"when": "view == hangar.panel && viewItem == ticket.draft",
+					"group": "inline@3"
+				},
+				{
+					"command": "hangar.removeWorktree",
+					"when": "view == hangar.panel && viewItem =~ /\\.removable/",
+					"group": "inline@3"
+				},
+				{
+					"command": "hangar.promoteChat",
+					"when": "view == hangar.panel && viewItem =~ /^chat\\./",
+					"group": "inline@1"
+				},
+				{
+					"command": "hangar.forgetChat",
+					"when": "view == hangar.panel && viewItem == chat.stopped",
+					"group": "inline@2"
+				},
+				{
+					"command": "hangar.stopClaude",
+					"when": "view == hangar.panel && viewItem == agent.live.busy",
+					"group": "inline@1"
+				},
+				{
+					"command": "hangar.openThisTicket",
+					"when": "view == hangar.panel && viewItem =~ /^ticket/",
+					"group": "1_open@1"
+				},
+				{
+					"command": "hangar.openThisChat",
+					"when": "view == hangar.panel && viewItem =~ /^chat\\./",
+					"group": "1_open@1"
+				},
+				{
+					"command": "hangar.diffTicket",
+					"when": "view == hangar.panel && viewItem == ticket",
+					"group": "1_open@2"
+				},
+				{
+					"command": "hangar.addRepo",
+					"when": "view == hangar.panel && (viewItem == ticket || viewItem == ticket.draft)",
+					"group": "2_change@1"
+				},
+				{
+					"command": "hangar.promoteChat",
+					"when": "view == hangar.panel && viewItem =~ /^chat\\./",
+					"group": "2_change@1"
+				},
+				{
+					"command": "hangar.forgetDraft",
+					"when": "view == hangar.panel && viewItem == ticket.draft",
+					"group": "9_remove@1"
+				},
+				{
+					"command": "hangar.forgetChat",
+					"when": "view == hangar.panel && viewItem == chat.stopped",
+					"group": "9_remove@1"
+				},
+				{
+					"command": "hangar.stopClaude",
+					"when": "view == hangar.panel && viewItem == agent.live.busy",
+					"group": "1_claude@1"
+				},
+				{
+					"command": "hangar.closeClaude",
+					"when": "view == hangar.panel && viewItem =~ /^agent\\.live/",
+					"group": "1_claude@2"
+				},
+				{
+					"command": "hangar.diffWorktree",
+					"when": "view == hangar.panel && viewItem =~ /^(worktree(\\.pr)?(\\.removable)?|branch)$/",
+					"group": "1_open@1"
+				},
+				{
+					"command": "hangar.terminalInWorktree",
+					"when": "view == hangar.panel && viewItem =~ /^(worktree(\\.pr)?(\\.removable)?|branch)$/",
+					"group": "1_open@2"
+				},
+				{
+					"command": "hangar.revealWorktree",
+					"when": "view == hangar.panel && viewItem =~ /^(worktree(\\.pr)?(\\.removable)?|branch)$/",
+					"group": "1_open@3"
+				},
+				{
+					"command": "hangar.copyBranch",
+					"when": "view == hangar.panel && viewItem =~ /^(worktree(\\.pr)?(\\.removable)?|branch)$/",
+					"group": "3_copy@1"
+				},
+				{
+					"command": "hangar.copyPath",
+					"when": "view == hangar.panel && viewItem =~ /^(worktree(\\.pr)?(\\.removable)?|branch)$/",
+					"group": "3_copy@2"
+				},
+				{
+					"command": "hangar.removeWorktree",
+					"when": "view == hangar.panel && viewItem =~ /\\.removable/",
+					"group": "9_remove@1"
+				},
+				{
+					"command": "hangar.openPR",
+					"when": "view == hangar.panel && viewItem == pr",
+					"group": "1_open@1"
+				},
+				{
+					"command": "hangar.copyPRLink",
+					"when": "view == hangar.panel && viewItem == pr",
+					"group": "3_copy@1"
+				},
+				{
+					"command": "hangar.newChat",
+					"when": "view == hangar.panel && viewItem == chats",
+					"group": "inline@1"
+				},
+				{
+					"command": "hangar.newTicket",
+					"when": "view == hangar.panel && viewItem == tickets",
+					"group": "inline@1"
+				},
+				{
+					"command": "hangar.removeProject",
+					"when": "view == hangar.panel && viewItem == project",
+					"group": "inline@1"
+				},
+				{
+					"command": "hangar.newChat",
+					"when": "view == hangar.panel && viewItem =~ /^project/",
+					"group": "1_new@1"
+				},
+				{
+					"command": "hangar.newTicket",
+					"when": "view == hangar.panel && viewItem =~ /^project/",
+					"group": "1_new@2"
+				},
+				{
+					"command": "hangar.removeProject",
+					"when": "view == hangar.panel && viewItem == project",
+					"group": "9_remove@1"
+				}
+			],
+			"commandPalette": [
+				{
+					"command": "hangar.diffWorktree",
+					"when": "false"
+				},
+				{
+					"command": "hangar.openPR",
+					"when": "false"
+				},
+				{
+					"command": "hangar.removeWorktree",
+					"when": "false"
+				},
+				{
+					"command": "hangar.addRepo",
+					"when": "false"
+				},
+				{
+					"command": "hangar.forgetDraft",
+					"when": "false"
+				},
+				{
+					"command": "hangar.promoteChat",
+					"when": "false"
+				},
+				{
+					"command": "hangar.forgetChat",
+					"when": "false"
+				},
+				{
+					"command": "hangar.stopClaude",
+					"when": "false"
+				},
+				{
+					"command": "hangar.closeClaude",
+					"when": "false"
+				},
+				{
+					"command": "hangar.revealWorktree",
+					"when": "false"
+				},
+				{
+					"command": "hangar.terminalInWorktree",
+					"when": "false"
+				},
+				{
+					"command": "hangar.copyBranch",
+					"when": "false"
+				},
+				{
+					"command": "hangar.copyPath",
+					"when": "false"
+				},
+				{
+					"command": "hangar.copyPRLink",
+					"when": "false"
+				},
+				{
+					"command": "hangar.diffTicket",
+					"when": "false"
+				},
+				{
+					"command": "hangar.claude",
+					"when": "false"
+				},
+				{
+					"command": "hangar.openThisTicket",
+					"when": "false"
+				},
+				{
+					"command": "hangar.openThisChat",
+					"when": "false"
+				},
+				{
+					"command": "hangar.removeProject",
+					"when": "false"
+				}
+			]
+		},
+		"keybindings": [
+			{
+				"command": "workbench.view.extension.hangar",
+				"key": "cmd+alt+o",
+				"mac": "cmd+alt+o"
+			},
+			{
+				"command": "hangar.diffActive",
+				"key": "cmd+alt+r",
+				"mac": "cmd+alt+r"
+			}
+		]
+	}
+}

@@ -102,8 +102,9 @@ function since(seconds) {
   return `${Math.round(s / 86400)} d ago`;
 }
 
-// SwiftBar reads "text | params": a | in a title would end it early
-const clean = (t) => String(t).replace(/\|/g, '¦').replace(/\n/g, ' ');
+// SwiftBar reads "text | params": a | in a title would end it early. One line, and no control
+// characters: an escape code in a title would recolor the menu, which renders them.
+const clean = (t) => String(t).replace(/\|/g, '¦').replace(/[\n\r\u2028\u2029]/g, ' ').replace(/[\u0000-\u001f\u007f]/g, '');
 const DIM = '\u001b[90m';
 const RESET = '\u001b[0m';
 // The Hangar's own links carry its key, so it opens them without asking (a link from anywhere else asks)

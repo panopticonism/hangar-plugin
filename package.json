@@ -146,7 +146,7 @@
 				"command": "hangar.addRepo",
 				"title": "Add repo to ticket…",
 				"category": "Hangar",
-				"icon": "$(repo-forked)"
+				"icon": "$(repo-create)"
 			},
 			{
 				"command": "hangar.diffActive",

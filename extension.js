@@ -292,7 +292,7 @@ async function baseRef(wt) {
 // ticket has a worktree.
 const DRAFTS_DIR = path.join(HOME, '.cache/hangar/drafts');
 let drafts = {};
-function readDrafts() {
+function readDrafts({ prune = true } = {}) {
   const next = {};
   for (const f of jsonFiles(DRAFTS_DIR)) {
     try {
@@ -302,7 +302,7 @@ function readDrafts() {
       // under it); any other draft is done once its ticket has a worktree
       const done = d.adopted ? ![...worktrees.values()].some((w) => w.branch === d.branch)
         : [...worktrees.values()].some((w) => w.ticket === d.ticket);
-      if (done) { fs.unlinkSync(path.join(DRAFTS_DIR, f)); continue; }
+      if (prune && done) { fs.unlinkSync(path.join(DRAFTS_DIR, f)); continue; }
       next[d.ticket] = d;
     } catch {}
   }
@@ -436,6 +436,9 @@ function poll() {
   invalidate();
   if (!projects().length) return Promise.resolve();
   pollRun = (async () => {
+    // Worktrees are filed under the drafts that claimed their branch, so on the first scan those are
+    // read before the worktrees are found (and kept: none of their worktrees has been seen yet)
+    if (!worktrees.size) readDrafts({ prune: false });
     await discover();
     await Promise.all([...worktrees.values()].map(localStatus));
     readDrafts();
@@ -1041,22 +1044,40 @@ async function showDiff(ids, title) {
     vscode.window.showInformationMessage(`${title}: no changes against ${bases.join(', ')}`);
     return;
   }
-  // The worktrees' paths start with a slash, which a URI path can't take twice: a hash of them names it
-  const source = vscode.Uri.from({ scheme: 'hangar-diff', path: `/${crypto.createHash('sha1').update([...ids].sort().join('\n')).digest('hex')}` });
+  // The worktrees' paths start with a slash, which a URI path can't take twice: a hash of them names it.
+  // With this window's own id in it, so it's never mistaken for an empty diff tab from the last session.
+  const key = crypto.createHash('sha1').update([SESSION_ID, ...[...ids].sort()].join('\n')).digest('hex');
   // Open diffs are told apart by their tab's title (the only thing a tab shows of it), so a different
   // diff that would get the same title (say two different "3 tickets") gets a number
-  const key = source.toString();
   const base = `${title} · vs ${bases.join(', ')}`;
   const taken = new Set([...openDiffs].filter(([k]) => k !== key).map(([, d]) => d.label));
-  let label = openDiffs.get(key)?.label || base;
+  const prev = openDiffs.get(key);
+  let label = prev?.label || base;
   for (let n = 2; taken.has(label); n++) label = `${base} (${n})`;
+  const source = prev && prev.signature === signature ? prev.source : diffSource(key);
   openDiffs.set(key, { label, ids, signature, stale: false, source });
   await openMultiDiff(source, label, resources);
+  if (prev && prev.source !== source) closeOtherDiffTabs(label);
 }
 
-// The editor's own multi-file diff. The internal command updates an open diff in place when given
-// the same source again; if an editor update drops it, the public vscode.changes still opens it.
+// An open diff keeps the files it was opened with: given new ones under the same source, the editor
+// just shows the old tab again. So a diff whose files changed opens under a new source, and the tab
+// it replaces is closed.
+let diffVersion = 0;
+const diffSource = (key) => vscode.Uri.from({ scheme: 'hangar-diff', path: `/${key}-${++diffVersion}` });
+function closeOtherDiffTabs(label) {
+  const current = vscode.window.tabGroups.activeTabGroup.activeTab;
+  const old = vscode.window.tabGroups.all.flatMap((g) => g.tabs).filter((t) => t !== current && diffTabLabel(t.label) === label);
+  if (old.length) vscode.window.tabGroups.close(old, true).then(undefined, () => {});
+}
+
+// The editor's own multi-file diff, through its internal command, which can name the diff (so it's
+// found again); if an editor update drops it, the public vscode.changes still opens it.
 async function openMultiDiff(source, title, resources) {
+  diffsOpening++;
+  try { await openMultiDiffNow(source, title, resources); } finally { diffsOpening--; }
+}
+async function openMultiDiffNow(source, title, resources) {
   try {
     await vscode.commands.executeCommand('_workbench.openMultiDiffEditor', { multiDiffSourceUri: source, title, resources });
   } catch {
@@ -1065,14 +1086,31 @@ async function openMultiDiff(source, title, resources) {
   }
 }
 
+// The editor brings back a diff tab from the last session without the files it showed (it doesn't keep
+// them), so it would stay empty: Hangar's are closed, and Diff opens them again
+const SESSION_ID = crypto.randomUUID();
+function closeRestoredDiffs() {
+  if (!vscode.TabInputTextMultiDiff) return;
+  const known = new Set([...openDiffs.values()].map((d) => d.label));
+  const stale = vscode.window.tabGroups.all.flatMap((g) => g.tabs).filter((t) => t.input instanceof vscode.TabInputTextMultiDiff
+    && / · vs /.test(t.label) && !known.has(diffTabLabel(t.label)));
+  if (stale.length) vscode.window.tabGroups.close(stale, true);
+}
+
+// Newer editors add the file count to the tab's title ("ABC-123 · vs main (3 files)")
+const diffTabLabel = (label) => label?.replace(/ \(\d+ files?\)$/, '');
 // Edits to files already in a diff show live (that side is the real file). Files that start or
 // stop being changed are picked up here: right away if the diff is the active tab, otherwise as
 // soon as you switch to it, so a refresh never pulls focus away from Claude.
+// A diff whose tab is gone is forgotten only on a full scan, and never while one is opening: swapping
+// a tab for a new one leaves a moment with neither, which a tab change event can land in.
+let diffsOpening = 0;
 async function refreshOpenDiffs(onlyActive = false) {
-  const activeLabel = vscode.window.tabGroups.activeTabGroup.activeTab?.label;
-  const openLabels = new Set(vscode.window.tabGroups.all.flatMap((g) => g.tabs.map((t) => t.label)));
+  if (diffsOpening) return;
+  const activeLabel = diffTabLabel(vscode.window.tabGroups.activeTabGroup.activeTab?.label);
+  const openLabels = new Set(vscode.window.tabGroups.all.flatMap((g) => g.tabs.map((t) => diffTabLabel(t.label))));
   for (const [key, d] of openDiffs) {
-    if (!openLabels.has(d.label)) { openDiffs.delete(key); continue; }
+    if (!openLabels.has(d.label)) { if (!onlyActive) openDiffs.delete(key); continue; }
     if (onlyActive && d.label !== activeLabel) continue;
     const wts = d.ids.map((id) => worktrees.get(id)).filter(Boolean);
     let next;
@@ -1081,7 +1119,9 @@ async function refreshOpenDiffs(onlyActive = false) {
     if (d.label !== activeLabel) { d.stale = true; continue; }
     d.signature = next.signature;
     d.stale = false;
+    d.source = diffSource(key);
     await openMultiDiff(d.source, d.label, next.resources);
+    closeOtherDiffTabs(d.label);
   }
 }
 
@@ -1861,6 +1901,7 @@ function activate(ctx) {
   if (isHangarWindow() && vscode.workspace.getConfiguration('hangar').get('showOnStartup', true)) {
     vscode.commands.executeCommand('workbench.view.extension.hangar');
   }
+  closeRestoredDiffs();
   poll().then(async () => {
     treeView.message = projects().length ? undefined
       : 'Open a folder to see its repos’ worktrees and tickets here (a repo, a folder of repos, or set Hangar › Root folder).';

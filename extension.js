@@ -154,7 +154,7 @@ async function discover() {
       if (seen.has(e.dir)) continue;
       seen.add(e.dir);
       const wt = worktrees.get(e.dir) ?? { id: e.dir, repo, repoDir: dir, root, dir: e.dir, folder: path.basename(e.dir), local: null, pr: undefined, prAt: 0, fetchedAt: 0 };
-      if (wt.branch !== e.branch) { wt.pr = undefined; wt.prAt = 0; }
+      if (wt.branch !== e.branch) { wt.pr = undefined; wt.prError = null; wt.prAt = 0; }
       wt.branch = e.branch;
       wt.ticket = draftFor(e.branch) || ticketOf(e.branch);
       worktrees.set(e.dir, wt);
@@ -210,10 +210,22 @@ async function localStatus(wt) {
   wt.local = { dirty: status.split('\n').filter(Boolean).length, ahead, behind };
 }
 
+// A check that was run again (a re-run, or a newer run that cancelled it, e.g. the same workflow for both
+// push and pull_request) shows up once per run; only the latest of each counts, so a run that a newer one
+// replaced doesn't turn CI red.
+function latestChecks(rollup) {
+  const latest = new Map();
+  for (const c of [...rollup].sort((a, b) => String(a.startedAt || '').localeCompare(String(b.startedAt || '')))) {
+    latest.set(`${c.workflowName || ''}/${c.name || c.context || ''}`, c);
+  }
+  return [...latest.values()];
+}
+
 // CI approval holds ("Approve deployment to dev") and the workflow waiting on them stay
 // pending until someone approves, so they're reported separately instead of as running CI.
 function checksSummary(rollup) {
   if (!rollup?.length) return { checks: 'none', approval: false };
+  rollup = latestChecks(rollup);
   const name = (c) => String(c.name || c.context || '');
   const isPending = (c) => {
     const s = String(c.conclusion || c.state || '').toUpperCase();
@@ -229,6 +241,9 @@ function checksSummary(rollup) {
   return { checks: pending ? 'pending' : 'pass', approval: holds.length > 0 };
 }
 
+// gh says when a branch has no PR; anything else (signed out, offline, rate limited) is an error, and the
+// PR as last seen stays, marked as not up to date, rather than turning into "No PR". Without gh at all
+// there's simply no PR status.
 async function prStatus(wt) {
   wt.prAt = Date.now();
   try {
@@ -238,8 +253,16 @@ async function prStatus(wt) {
       number: pr.number, state: pr.isDraft && pr.state === 'OPEN' ? 'DRAFT' : pr.state, title: pr.title, url: pr.url,
       review: pr.reviewDecision || null, ...checksSummary(pr.statusCheckRollup), base: pr.baseRefName,
     };
-  } catch {
-    wt.pr = null;
+    wt.prError = null;
+  } catch (e) {
+    const msg = String(e.stderr || e.message || '').trim().split('\n')[0];
+    if (e.code === 'ENOENT' || /no (open )?pull requests? found/i.test(msg)) {
+      wt.pr = null;
+      wt.prError = null;
+    } else {
+      wt.pr ??= null;
+      wt.prError = msg || 'gh failed';
+    }
   }
 }
 
@@ -762,11 +785,14 @@ class Tree {
 
   prItem(w) {
     const pr = w.pr;
-    const item = new vscode.TreeItem(pr ? `PR #${pr.number} ${pr.state.toLowerCase()}` : 'No PR', vscode.TreeItemCollapsibleState.None);
+    const item = new vscode.TreeItem(pr ? `PR #${pr.number} ${pr.state.toLowerCase()}` : w.prError ? 'PR status unavailable' : 'No PR', vscode.TreeItemCollapsibleState.None);
     item.id = `pr:${w.id}`;
     item.contextValue = pr ? 'pr' : 'nopr';
+    const retry = `Tried again every ${PR_TTL_MS / 1000} seconds, or with Refresh. If gh is signed out: gh auth login`;
+    const unavailable = `Couldn't get the PR status from GitHub:\n${w.prError}\n\n${retry}`;
     if (!pr) {
-      item.iconPath = new vscode.ThemeIcon('git-pull-request', new vscode.ThemeColor('disabledForeground'));
+      item.iconPath = new vscode.ThemeIcon(w.prError ? 'warning' : 'git-pull-request', new vscode.ThemeColor(w.prError ? 'problemsWarningIcon.foreground' : 'disabledForeground'));
+      if (w.prError) item.tooltip = unavailable;
       return item;
     }
     const ci = openPR(pr) ? { pass: 'CI passed', fail: 'CI failed', pending: 'CI running', none: '' }[pr.checks] : '';
@@ -774,6 +800,7 @@ class Tree {
     if (pr.approval && pr.state === 'OPEN') bits.push('deploy approval');
     if (openPR(pr) && pr.review === 'APPROVED') bits.push('approved');
     if (openPR(pr) && pr.review === 'CHANGES_REQUESTED') bits.push('changes requested');
+    if (w.prError) bits.push('not up to date');
     item.description = bits.filter(Boolean).join(' · ');
     const icon = pr.state === 'MERGED' ? 'git-merge' : pr.state === 'CLOSED' ? 'git-pull-request-closed'
       : pr.state === 'DRAFT' ? 'git-pull-request-draft' : 'git-pull-request';
@@ -788,6 +815,7 @@ class Tree {
       lines.push({ APPROVED: 'Approved', CHANGES_REQUESTED: 'Changes requested', REVIEW_REQUIRED: 'Review required' }[pr.review] || 'No review yet');
       lines.push('');
     }
+    if (w.prError) lines.push(`As last seen: couldn't update it from GitHub:\n${w.prError}\n${retry}`, '');
     lines.push('Click to open on GitHub');
     item.tooltip = lines.join('\n');
     item.command = { command: 'hangar.openPR', title: 'Open PR on GitHub', arguments: [{ kind: 'pr', id: w.id }] };

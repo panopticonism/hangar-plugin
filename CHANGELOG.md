@@ -15,3 +15,5 @@ First public release, as `panopticonism.hangar`.
 - *Open ticket or chat…* lists chats too; chat terminals are named after the chat.
 - Links from outside the Hangar (a web page, another app) ask before they open a chat or ticket; the Hangar's own links carry a key.
 - What Claude is told keeps names and paths from git and the file system out of its instructions, as data.
+- CI stays green when a check was run again: only the latest run of each check counts, so one that a newer run cancelled doesn't show as failed.
+- When `gh` can't reach GitHub (signed out, offline, rate limited) a PR keeps its last status, marked *not up to date*, and a worktree with no PR seen yet says *PR status unavailable*, instead of *No PR*.

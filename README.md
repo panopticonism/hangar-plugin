@@ -11,7 +11,7 @@ Works in VSCodium, Cursor and VS Code, **on macOS**. Other systems aren't suppor
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude` on your PATH): each chat and ticket runs one in an editor terminal.
 - `git`.
-- Optional: [`gh`](https://cli.github.com), signed in, for PR, review and CI status. Without it, the PR rows say *No PR*.
+- Optional: [`gh`](https://cli.github.com), signed in, for PR, review and CI status. Without it, the PR rows say *No PR*. When it can't reach GitHub (signed out, offline, rate limited), a PR keeps its last status, marked *not up to date*, and one not seen yet says *PR status unavailable*. A check that ran more than once counts by its latest run, so a run that a newer one cancelled doesn't fail CI.
 - Optional: `git gtr` creates and removes worktrees when it's installed; without it, worktrees go next to the repo as `<repo>.worktrees/<branch>`.
 - Optional: [SwiftBar](https://swiftbar.app), for the menu bar.
 

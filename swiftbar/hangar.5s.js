@@ -15,12 +15,67 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const zlib = require('zlib');
+const { execFileSync } = require('child_process');
 
 const HOME = os.homedir();
 const CACHE = path.join(HOME, '.cache/hangar');
 // The status file is written every 10 seconds while the Hangar window is open
 const STALE_AFTER = 45;
 const now = Math.floor(Date.now() / 1000);
+
+// Colors come as "light,dark" pairs. SwiftBar ignores a pair for an icon's color (sfcolor), so the
+// script picks one itself; it runs every 5 seconds, so it follows a switch to or from dark mode.
+let dark = false;
+try { dark = execFileSync('/usr/bin/defaults', ['read', '-g', 'AppleInterfaceStyle'], { stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim() === 'Dark'; } catch {}
+const pick = (pair) => String(pair).split(',')[dark ? 1 : 0] || String(pair).split(',')[0];
+
+// Each chat's and ticket's mark in its color: a dot for a chat, a rounded square for a ticket. SwiftBar
+// recolors SF Symbols in menus to the text color, but shows an image as it is, so the script draws
+// one: a 32-pixel PNG at 144 dpi (16 points, sharp on Retina), edges smoothed.
+const CRC = Array.from({ length: 256 }, (_, n) => { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1; return c >>> 0; });
+const crc32 = (buf) => { let c = 0xffffffff; for (const b of buf) c = CRC[(c ^ b) & 0xff] ^ (c >>> 8); return (c ^ 0xffffffff) >>> 0; };
+function pngChunk(type, data) {
+  const len = Buffer.alloc(4); len.writeUInt32BE(data.length);
+  const body = Buffer.concat([Buffer.from(type, 'ascii'), data]);
+  const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(body));
+  return Buffer.concat([len, body, crc]);
+}
+const marks = new Map();
+function mark(hex, shape) {
+  const key = hex + shape;
+  if (marks.has(key)) return marks.get(key);
+  const size = 32;
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  const rows = [];
+  for (let y = 0; y < size; y++) {
+    const row = Buffer.alloc(1 + size * 4); // filter byte 0, then RGBA
+    for (let x = 0; x < size; x++) {
+      const dx = x + 0.5 - size / 2;
+      const dy = y + 0.5 - size / 2;
+      // Signed distance to the shape's edge: a circle of radius 9, or a 18-wide square with corners of 4
+      let d;
+      if (shape === 'dot') d = Math.hypot(dx, dy) - 9;
+      else {
+        const qx = Math.abs(dx) - 9 + 4;
+        const qy = Math.abs(dy) - 9 + 4;
+        d = Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) + Math.min(Math.max(qx, qy), 0) - 4;
+      }
+      const alpha = Math.round(255 * Math.min(1, Math.max(0, 0.5 - d)));
+      row.set([r, g, b, alpha], 1 + x * 4);
+    }
+    rows.push(row);
+  }
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0); ihdr.writeUInt32BE(size, 4);
+  ihdr.set([8, 6, 0, 0, 0], 8); // 8-bit RGBA
+  const phys = Buffer.alloc(9);
+  phys.writeUInt32BE(5669, 0); phys.writeUInt32BE(5669, 4); phys[8] = 1; // 144 dpi
+  const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), pngChunk('IHDR', ihdr), pngChunk('pHYs', phys),
+    pngChunk('IDAT', zlib.deflateSync(Buffer.concat(rows))), pngChunk('IEND', Buffer.alloc(0))]).toString('base64');
+  marks.set(key, png);
+  return png;
+}
 
 const readJson = (file) => { try { return JSON.parse(fs.readFileSync(file, 'utf8')); } catch { return null; } };
 const jsonIn = (dir) => { try { return fs.readdirSync(dir).filter((f) => f.endsWith('.json') && !f.startsWith('.')).map((f) => readJson(path.join(dir, f))).filter(Boolean); } catch { return []; } };
@@ -79,14 +134,16 @@ const iconFile = path.join(HOME, '.local/share/hangar/menubar.png');
 let icon = '';
 try { icon = ` templateImage=${fs.readFileSync(iconFile).toString('base64')}`; } catch { icon = ' sfimage=airplane'; }
 const title = [needs ? `${needs} waiting on you` : working ? `${working} working` : '', failing.length ? `✗ ${failing.length} CI` : ''].filter(Boolean).join(' · ');
-const out = [`${title}|${icon}${needs ? ' color=#b08800,#e3b341' : ''}`, '---'];
+const out = [`${title}|${icon}${needs ? ` color=${pick('#b08800,#e3b341')}` : ''}`, '---'];
 
 const row = (it) => {
   const ci = it.ticket?.ci === 'fail' ? ' ✗ CI failed' : '';
   const when = it.state === 'needs-input' || it.state === 'working' ? ` · ${since(it.at)}` : '';
   // Its icon in the chat's or ticket's own color, the one it has in the Hangar panel
-  const icon = `sfimage=${it.chat ? 'bubble.left.fill' : 'tag.fill'}${/^#[0-9a-f]{6},#[0-9a-f]{6}$/i.test(it.color || '') ? ` sfcolor=${it.color}` : ''}`;
-  out.push(`${it.label}${it.note ? `${DIM}  ${clean(it.note)}${RESET}` : ''}${ci}${when} | href=${link(it.name)} ${icon} ansi=true${ci ? ' color=#cf222e,#ff7b72' : ''}`);
+  const icon = /^#[0-9a-f]{6},#[0-9a-f]{6}$/i.test(it.color || '')
+    ? `image=${mark(pick(it.color), it.chat ? 'dot' : 'square')}`
+    : `sfimage=${it.chat ? 'bubble.left' : 'tag'}`;
+  out.push(`${it.label}${it.note ? `${DIM}  ${clean(it.note)}${RESET}` : ''}${ci}${when} | href=${link(it.name)} ${icon} ansi=true${ci ? ` color=${pick('#cf222e,#ff7b72')}` : ''}`);
   for (const pr of it.ticket?.prs || []) {
     const checks = { pass: 'CI passed', fail: 'CI failed', pending: 'CI running', none: '' }[pr.checks] || '';
     out.push(`--${clean(pr.repo)}: PR #${pr.number} ${String(pr.state).toLowerCase()}${checks && ['OPEN', 'DRAFT'].includes(pr.state) ? ` · ${checks}` : ''} | href=${pr.url}`);
@@ -95,7 +152,7 @@ const row = (it) => {
 const group = (heading, state, color) => {
   const list = items.filter((it) => it.state === state);
   if (!list.length) return;
-  out.push(`${heading} | size=11 color=${color}`);
+  out.push(`${heading} | size=11 color=${pick(color)}`);
   list.forEach(row);
 };
 

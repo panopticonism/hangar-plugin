@@ -21,22 +21,22 @@ Works in VSCodium, Cursor and VS Code, **on macOS**. Other systems aren't suppor
 | --- | --- |
 | `hangar.root` | The root folder: a repo, a folder of repos, or a meta-repo. Empty: the window's first folder. |
 | `hangar.roots` | More projects besides the root. Projects added with *Add project…* are kept separately. |
-| `hangar.showOnStartup` | Show the Hangar when the Hangar window opens. |
-| `hangar.menuBar` | Show the Hangar in the Mac menu bar (off by default; needs SwiftBar). |
+| `hangar.showOnStartup` | Show Hangar when the Hangar window opens. |
+| `hangar.menuBar` | Show Hangar in the Mac menu bar (off by default; needs SwiftBar). |
 
 ## Agent status
 
-On first start the Hangar asks to add Claude Code hooks to `~/.claude/settings.json` (*Turn on agent status* asks again later). They run `agent-hook.js`, which only acts for Claudes the Hangar started (those have `HANGAR_TICKET` set) and records working, waiting on you (a permission or a question; not Claude's idle reminder), idle or stopped, with the session ID so a stopped one resumes. Once they're on, the Hangar keeps them pointing at the current Node and hook script without asking again; your other hooks are left as they are.
+On first start Hangar asks to add Claude Code hooks to `~/.claude/settings.json` (*Turn on agent status* asks again later). They run `agent-hook.js`, which only acts for Claudes Hangar started (those have `HANGAR_TICKET` set) and records working, waiting on you (a permission or a question; not Claude's idle reminder), idle or stopped, with the session ID so a stopped one resumes. Once they're on, Hangar keeps them pointing at the current Node and hook script without asking again; your other hooks are left as they are.
 
 ## Menu bar
 
-Off by default. With `hangar.menuBar` on and [SwiftBar](https://swiftbar.app) installed (open it once to choose its plugin folder), the Hangar puts `hangar.5s.js` in SwiftBar's plugin folder and keeps it up to date; turning the setting off takes it out again. The script runs with the Node the editor found, since SwiftBar's PATH has neither nvm nor Homebrew.
+Off by default. With `hangar.menuBar` on and [SwiftBar](https://swiftbar.app) installed (open it once to choose its plugin folder), Hangar puts `hangar.5s.js` in SwiftBar's plugin folder and keeps it up to date; turning the setting off takes it out again. The script runs with the Node the editor found, since SwiftBar's PATH has neither nvm nor Homebrew.
 
-The menu bar shows the hangar, how many Claudes are waiting on you or working, and failing CI. The menu lists every chat and ticket by what its Claude is doing, with each ticket's PRs; clicking one opens it in the Hangar window of the editor it runs in. It reads `~/.cache/hangar/status.json`, which the Hangar window writes every 10 seconds, and the hooks' files; when the window is closed, everything shows as not running.
+The menu bar shows Hangar's icon, how many Claudes are waiting on you or working, and failing CI. The menu lists every chat and ticket by what its Claude is doing, with each ticket's PRs; clicking one opens it in the Hangar window of the editor it runs in. It reads `~/.cache/hangar/status.json`, which the Hangar window writes every 10 seconds, and the hooks' files; when the window is closed, everything shows as not running.
 
 ## Links
 
-`<scheme>://panopticonism.hangar/open?ticket=…` opens a chat or ticket in the Hangar window, `…/diff?ticket=…` shows a ticket's changes, and `…/added?ticket=…&branch=…` files a branch under a ticket: Claude uses the last two to show you its work and report the worktrees it makes, and the menu bar the first. Since any web page or app can open such a link, the Hangar's own links carry a key kept in `~/.local/share/hangar/link-key` (readable only by you); a link without it asks before it switches the window or starts a Claude, and an `added` link without it is ignored.
+`<scheme>://panopticonism.hangar/open?ticket=…` opens a chat or ticket in the Hangar window, `…/diff?ticket=…` shows a ticket's changes, and `…/added?ticket=…&branch=…` files a branch under a ticket: Claude uses the last two to show you its work and report the worktrees it makes, and the menu bar the first. Since any web page or app can open such a link, Hangar's own links carry a key kept in `~/.local/share/hangar/link-key` (readable only by you); a link without it asks before it switches the window or starts a Claude, and an `added` link without it is ignored. The commands Claude is given read the key from that file, so it's in neither its prompt nor its transcript. A link to open or show something that waited more than five minutes for a Hangar window is dropped.
 
 ## What Claude is told
 

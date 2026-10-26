@@ -168,15 +168,19 @@ async function discover() {
 // Claude made a branch carrying its name (a ticket called "onboarding" and feature/onboarding-flow).
 // That ticket keeps the branch from then on, so its worktrees stay under it.
 const slug = (v) => String(v).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');
+// The branches a ticket holds: the one it was started with or took, and any more its Claude reported
+// or that were moved to it (records from before kept just `branch`)
+const draftBranches = (d) => [...new Set([d.branch, ...(d.branches || [])].filter(Boolean))];
 function draftFor(branch) {
   const all = Object.values(drafts);
-  const own = all.find((d) => d.branch === branch);
+  const own = all.find((d) => draftBranches(d).includes(branch));
   if (own) return own.ticket;
   const s = slug(branch);
   const claim = all.find((d) => !d.branch && slug(d.ticket).length >= 3
     && new RegExp(`(^|-)${slug(d.ticket)}(-|$)`).test(s) && ticketOf(branch) !== d.ticket);
   if (!claim) return null;
   claim.branch = branch;
+  claim.branches = [branch];
   claim.adopted = true;
   try { writeJson(draftFile(claim.ticket), claim); } catch {}
   return claim.ticket;
@@ -188,11 +192,23 @@ function draftFor(branch) {
 function claimBranch(ticket, branch) {
   if (!ticket || !branch) return;
   for (const d of Object.values(drafts)) {
-    // A branch belongs to one ticket: another ticket that had claimed it lets go
-    if (d.ticket !== ticket && d.branch === branch && d.adopted) { try { fs.unlinkSync(draftFile(d.ticket)); } catch {} delete drafts[d.ticket]; }
+    // A branch belongs to one ticket: another ticket that had claimed it lets go of it (and its record
+    // goes once it holds no branch)
+    if (d.ticket === ticket || !d.adopted || !draftBranches(d).includes(branch)) continue;
+    const rest = draftBranches(d).filter((b) => b !== branch);
+    if (rest.length) {
+      drafts[d.ticket] = { ...d, branch: rest[0], branches: rest };
+      writeJson(draftFile(d.ticket), drafts[d.ticket]);
+    } else {
+      try { fs.unlinkSync(draftFile(d.ticket)); } catch {}
+      delete drafts[d.ticket];
+    }
   }
-  if (ticketOf(branch) === ticket && !Object.values(drafts).some((d) => d.branch === branch)) return;
-  const d = { ...(drafts[ticket] || { ticket, root: rootOf(ticket), at: Math.floor(Date.now() / 1000) }), branch, adopted: true };
+  if (ticketOf(branch) === ticket && !Object.values(drafts).some((d) => draftBranches(d).includes(branch))) return;
+  const prev = drafts[ticket] || { ticket, root: rootOf(ticket), at: Math.floor(Date.now() / 1000) };
+  // A draft's planned branch stays its `branch`; a ticket that already holds branches adds this one
+  const branches = prev.adopted ? [...draftBranches(prev), branch] : [branch];
+  const d = { ...prev, branch: prev.branch || branch, branches: [...new Set(branches)], adopted: true };
   fs.mkdirSync(DRAFTS_DIR, { recursive: true });
   writeJson(draftFile(ticket), d);
   drafts[ticket] = d;
@@ -215,7 +231,9 @@ async function localStatus(wt) {
 // replaced doesn't turn CI red.
 function latestChecks(rollup) {
   const latest = new Map();
-  for (const c of [...rollup].sort((a, b) => String(a.startedAt || '').localeCompare(String(b.startedAt || '')))) {
+  // A run that's queued hasn't started (no startedAt): it's the newest, so it sorts last
+  const started = (c) => c.startedAt || '\uffff';
+  for (const c of [...rollup].sort((a, b) => started(a).localeCompare(started(b)))) {
     latest.set(`${c.workflowName || ''}/${c.name || c.context || ''}`, c);
   }
   return [...latest.values()];
@@ -298,11 +316,19 @@ function readDrafts({ prune = true } = {}) {
     try {
       const d = JSON.parse(fs.readFileSync(path.join(DRAFTS_DIR, f), 'utf8'));
       if (!d.ticket) continue;
-      // A ticket that took a branch keeps the branch while it has worktrees (that's what holds them
+      // A ticket that took branches keeps each one while it has worktrees (that's what holds them
       // under it); any other draft is done once its ticket has a worktree
-      const done = d.adopted ? ![...worktrees.values()].some((w) => w.branch === d.branch)
-        : [...worktrees.values()].some((w) => w.ticket === d.ticket);
-      if (prune && done) { fs.unlinkSync(path.join(DRAFTS_DIR, f)); continue; }
+      if (d.adopted && prune) {
+        const held = draftBranches(d).filter((b) => [...worktrees.values()].some((w) => w.branch === b));
+        if (!held.length) { fs.unlinkSync(path.join(DRAFTS_DIR, f)); continue; }
+        if (held.length < draftBranches(d).length) {
+          Object.assign(d, { branch: held[0], branches: held });
+          writeJson(path.join(DRAFTS_DIR, f), d);
+        }
+      } else if (!d.adopted && prune && [...worktrees.values()].some((w) => w.ticket === d.ticket)) {
+        fs.unlinkSync(path.join(DRAFTS_DIR, f));
+        continue;
+      }
       next[d.ticket] = d;
     } catch {}
   }
@@ -482,7 +508,7 @@ function claudeTerminalFor(name) {
 }
 
 // What each ticket's Claude is doing, written by the Claude Code hooks (agent-hook.js) for the
-// sessions the Hangar starts: working, needs-input, idle, or ended (kept with its session
+// sessions Hangar starts: working, needs-input, idle, or ended (kept with its session
 // id so the next start resumes that conversation).
 const AGENTS_DIR = path.join(HOME, '.cache/hangar/agents');
 let agents = {};
@@ -837,14 +863,14 @@ function updateStatusBar() {
   if (!activeTicket) { statusBar.hide(); return; }
   if (isChat(activeTicket)) {
     statusBar.text = `$(comment-discussion) ${displayName(activeTicket)}`;
-    statusBar.tooltip = 'Show the Hangar';
+    statusBar.tooltip = 'Show Hangar';
     statusBar.show();
     return;
   }
   const t = ticketByName(activeTicket);
   const prs = (t?.worktrees || []).filter((w) => w.pr).map((w) => `#${w.pr.number}`).join(' ');
   statusBar.text = `$(git-pull-request) ${activeTicket}${prs ? ' ' + prs : ''}`;
-  statusBar.tooltip = 'Show the Hangar';
+  statusBar.tooltip = 'Show Hangar';
   statusBar.show();
 }
 
@@ -930,7 +956,10 @@ function promptFacts(facts) {
 }
 
 function claudePrompt(name) {
-  const link = (action) => `${vscode.env.uriScheme}://${extensionId}/${action}?ticket=${encodeURIComponent(name)}&key=${linkKey()}`;
+  // The key stays in its file: the command reads it there, so it's in neither this prompt nor Claude's
+  // transcript. The rest of the link is URL-encoded, so it's safe inside double quotes.
+  linkKey();
+  const link = (action, extra = '') => `"${vscode.env.uriScheme}://${extensionId}/${action}?ticket=${encodeURIComponent(name)}${extra}&key=$(cat ${shq(LINK_KEY_FILE)})"`;
   const root = rootOf(name);
   const repos = repoNames(root).map((r) => ({ name: r, dir: repoDir(r, root) }));
   if (isChat(name)) {
@@ -955,8 +984,8 @@ function claudePrompt(name) {
     facts = { ticket: name, root, ...(planned ? { branch: planned } : {}), repos };
   }
   // Whatever the branch ends up called, this is what puts its worktrees under the ticket
-  lines.push(`Each time you create a worktree, then run \`open ${shq(`${link('added')}&branch=<branch>`)}\` with its branch URL-encoded in place of <branch>, so it shows under this ticket in the user's Hangar.`);
-  lines.push(`To show the user this ticket's changes, run \`open ${shq(link('diff'))}\`: it opens the diff in their Hangar window.`);
+  lines.push(`Each time you create a worktree, then run \`open ${link('added', '&branch=<branch>')}\` with its branch URL-encoded in place of <branch>, so it shows under this ticket in the user's Hangar.`);
+  lines.push(`To show the user this ticket's changes, run \`open ${link('diff')}\`: it opens the diff in their Hangar window.`);
   lines.push(promptFacts(facts));
   return lines.join('\n\n');
 }
@@ -979,7 +1008,8 @@ function claude(name) {
     const resume = session ? ` --resume ${shq(session)}` : '';
     fs.mkdirSync(PROMPTS_DIR, { recursive: true });
     const promptFile = path.join(PROMPTS_DIR, `${name.replace(/[/:]/g, '_')}.txt`);
-    fs.writeFileSync(promptFile, claudePrompt(name));
+    fs.writeFileSync(promptFile, claudePrompt(name), { mode: 0o600 });
+    fs.chmodSync(promptFile, 0o600);
     term.sendText(`cd ${shq(root)} && claude --append-system-prompt "$(cat ${shq(promptFile)})"${resume}`);
     // Until its hooks report in, don't run it a second time
     if (stopped) agents[name] = { ...a, state: 'starting' };
@@ -1220,7 +1250,7 @@ async function pickProject(el, what) {
 
 async function addProject() {
   const picked = await vscode.window.showOpenDialog({ canSelectFolders: true, canSelectFiles: false, openLabel: 'Add project',
-    title: 'Add a project to the Hangar: a repo, a folder of repos, or a meta-repo' });
+    title: 'Add a project to Hangar: a repo, a folder of repos, or a meta-repo' });
   const dir = picked?.[0]?.fsPath;
   if (!dir) return;
   const added = context.globalState.get('hangar.projects') || [];
@@ -1245,7 +1275,7 @@ async function removeFromRootsSetting(root) {
 }
 
 async function removeProject(root) {
-  const ok = await vscode.window.showWarningMessage(`Remove ${projectName(root)} from the Hangar?`,
+  const ok = await vscode.window.showWarningMessage(`Remove ${projectName(root)} from Hangar?`,
     { modal: true, detail: 'Only hides it here: its repos, worktrees and chats stay as they are, and adding it back shows them again.' }, 'Remove');
   if (ok !== 'Remove') return;
   await removeFromRootsSetting(root);
@@ -1332,7 +1362,7 @@ async function promoteChat(id) {
     }
     if (resumableSession(name, rootOf(name))) {
       const ok = await vscode.window.showWarningMessage(`${name} already has a conversation of its own. Continue it with this chat's instead?`,
-        { modal: true, detail: `${name}'s conversation stays in Claude's history (claude --resume), but the Hangar resumes the chat's from now on.` }, 'Use the chat');
+        { modal: true, detail: `${name}'s conversation stays in Claude's history (claude --resume), but Hangar resumes the chat's from now on.` }, 'Use the chat');
       if (ok !== 'Use the chat') return;
     }
   }
@@ -1362,7 +1392,12 @@ async function moveChat(id, name, v, a) {
   const name0 = `chat:${id}`;
   const from = chatCwd(chats[id]);
   const term = claudeTerminalFor(name0);
-  if (term && live(a)) {
+  // Without the hooks there's no telling whether Claude runs in it: asked to exit all the same, and
+  // given a few seconds to save before the terminal goes
+  if (term && !a) {
+    term.sendText('/exit');
+    await new Promise((r) => setTimeout(r, 4000));
+  } else if (term && live(a)) {
     term.sendText('/exit');
     const state = () => { try { return JSON.parse(fs.readFileSync(path.join(AGENTS_DIR, `${name0}.json`), 'utf8')); } catch { return null; } };
     // Up to 30 seconds to save and exit; closing the terminal before then could cut that short
@@ -1496,41 +1531,57 @@ async function addRepo(name) {
 // Links leave requests here; the Hangar window carries them out
 const REQUESTS_DIR = path.join(HOME, '.cache/hangar/requests');
 let handling = false;
+// A link that comes in while others are being handled (one waiting on its confirmation, say) is
+// picked up by another round right after. Opening or showing something
+// only makes sense right after the link: one that waited for a Hangar window to open is dropped.
+// Claude's report of a worktree it made still counts, however late.
+let handleAgain = false;
+const LINK_MAX_AGE_MS = 5 * 60_000;
 async function handleRequests() {
-  if (!isHangarWindow() || handling) return;
+  if (!isHangarWindow()) return;
+  if (handling) { handleAgain = true; return; }
   handling = true;
   try {
-    for (const f of jsonFiles(REQUESTS_DIR, { sorted: true })) {
-      const file = path.join(REQUESTS_DIR, f);
-      let req;
-      try { req = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { req = null; }
-      try { fs.unlinkSync(file); } catch { continue; }
-      if (!req?.ticket) continue;
-      if (!ticketByName(req.ticket)) await poll();
-      const exists = isChat(req.ticket) ? !!chats[chatId(req.ticket)] : !!ticketByName(req.ticket);
-      if (!exists) continue;
-      if (!req.trusted && !(await confirmLink(req))) continue;
-      if (req.action === 'open') await openTicket(req.ticket);
-      // A ticket's Claude added a repo: its branch is the ticket's, whatever it's called; show it if the
-      // window is on that ticket, never switch
-      if (req.action === 'added') {
-        if (req.trusted && req.branch && checkBranch(req.branch) === undefined) claimBranch(req.ticket, req.branch);
-        await poll();
-        if (req.ticket === activeTicket) await openTicket(req.ticket, { showClaude: false });
-      }
-      if (req.action === 'diff') {
-        const t = ticketByName(req.ticket);
-        if (!t) continue;
-        if (t.name !== activeTicket) await openTicket(t.name, { showClaude: false });
-        await showDiff(t.worktrees.map((w) => w.id), t.name);
-      }
-    }
+    do {
+      handleAgain = false;
+      await handleRequestsOnce();
+    } while (handleAgain);
   } finally {
     handling = false;
   }
 }
 
-// Any web page or app can open a <scheme>://<publisher>.hangar/… link. The links the Hangar makes
+async function handleRequestsOnce() {
+  for (const f of jsonFiles(REQUESTS_DIR, { sorted: true })) {
+    const file = path.join(REQUESTS_DIR, f);
+    let req;
+    try { req = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { req = null; }
+    try { fs.unlinkSync(file); } catch { continue; }
+    if (!req?.ticket) continue;
+    const at = Number(f.split('-')[0]);
+    if (req.action !== 'added' && at && Date.now() - at > LINK_MAX_AGE_MS) continue;
+    if (!ticketByName(req.ticket)) await poll();
+    const exists = isChat(req.ticket) ? !!chats[chatId(req.ticket)] : !!ticketByName(req.ticket);
+    if (!exists) continue;
+    if (!req.trusted && !(await confirmLink(req))) continue;
+    if (req.action === 'open') await openTicket(req.ticket);
+    // A ticket's Claude added a repo: its branch is the ticket's, whatever it's called; show it if the
+    // window is on that ticket, never switch
+    if (req.action === 'added') {
+      if (req.trusted && req.branch && checkBranch(req.branch) === undefined) claimBranch(req.ticket, req.branch);
+      await poll();
+      if (req.ticket === activeTicket) await openTicket(req.ticket, { showClaude: false });
+    }
+    if (req.action === 'diff') {
+      const t = ticketByName(req.ticket);
+      if (!t) continue;
+      if (t.name !== activeTicket) await openTicket(t.name, { showClaude: false });
+      await showDiff(t.worktrees.map((w) => w.id), t.name);
+    }
+  }
+}
+
+// Any web page or app can open a <scheme>://<publisher>.hangar/… link. The links Hangar makes
 // itself (Claude's diff link, the menu bar) carry this key, which only your user can read; a link
 // without it asks before it switches the window or starts a Claude.
 const LINK_KEY_FILE = path.join(SHARE_DIR, 'link-key');
@@ -1545,14 +1596,14 @@ function linkKey() {
   }
   return linkKeyValue;
 }
-const hasLinkKey = (key) => typeof key === 'string' && key.length === 32
+const hasLinkKey = (key) => typeof key === 'string' && /^[0-9a-f]{32}$/.test(key)
   && crypto.timingSafeEqual(Buffer.from(key), Buffer.from(linkKey()));
 
 async function confirmLink(req) {
   const what = isChat(req.ticket) ? `the chat "${displayName(req.ticket)}"` : `the ticket ${req.ticket}`;
   const ok = await vscode.window.showWarningMessage(
-    req.action === 'diff' ? `A link wants to show the changes of ${what}. Show them?` : `A link wants to open ${what} in the Hangar. Open it?`,
-    { modal: true, detail: `It came from outside the Hangar: a web page, another app or the terminal.${req.action === 'open' ? ' Opening it starts or resumes its Claude.' : ''}` },
+    req.action === 'diff' ? `A link wants to show the changes of ${what}. Show them?` : `A link wants to open ${what} in Hangar. Open it?`,
+    { modal: true, detail: `It came from outside Hangar: a web page, another app or the terminal.${req.action === 'open' ? ' Opening it starts or resumes its Claude.' : ''}` },
     req.action === 'diff' ? 'Show' : 'Open');
   return !!ok;
 }
@@ -1580,12 +1631,12 @@ const linkHandler = {
 // Off unless the hangar.menuBar setting turns it on: it puts a script in SwiftBar's plugin folder.
 const menuBarOn = () => vscode.workspace.getConfiguration('hangar').get('menuBar', false);
 const MENU_BAR_SCRIPT = 'hangar.5s.js';
-// Marks the script as the Hangar's, so turning the menu bar off never removes someone else's file
+// Marks the script as Hangar's, so turning the menu bar off never removes someone else's file
 const MENU_BAR_MARK = '<xbar.title>Hangar</xbar.title>';
 
 // What the menu bar shows, from the Hangar window: its chats and tickets, which Claudes are running
 // here, and each ticket's PRs and CI. The menu bar reads what each Claude is doing from the hooks'
-// files itself, and treats this file as out of date (the Hangar closed) once it stops being written.
+// files itself, and treats this file as out of date (Hangar closed) once it stops being written.
 // It also says which editor and extension wrote it, so the menu opens the same one.
 const STATUS_FILE = path.join(CACHE_DIR, 'status.json');
 function writeStatus() {
@@ -1638,14 +1689,14 @@ async function syncMenuBar({ asked = false } = {}) {
   }
   if (!dir) {
     if (asked) {
-      const pick = await vscode.window.showInformationMessage('The Hangar shows in the Mac menu bar through SwiftBar. Install SwiftBar, open it once to choose its plugin folder, then turn the menu bar on again.', 'Get SwiftBar');
+      const pick = await vscode.window.showInformationMessage('Hangar shows in the Mac menu bar through SwiftBar. Install SwiftBar, open it once to choose its plugin folder, then turn the menu bar on again.', 'Get SwiftBar');
       if (pick) vscode.env.openExternal(vscode.Uri.parse('https://swiftbar.app'));
     }
     return;
   }
   const node = await nodePath();
   if (!node) {
-    if (asked) vscode.window.showWarningMessage('The Hangar couldn’t find Node, which the menu bar script runs with.');
+    if (asked) vscode.window.showWarningMessage('Hangar couldn’t find Node, which the menu bar script runs with.');
     return;
   }
   fs.mkdirSync(SHARE_DIR, { recursive: true });
@@ -1656,7 +1707,7 @@ async function syncMenuBar({ asked = false } = {}) {
   writeStatus();
 }
 
-// ---- Claude Code hooks: how the Hangar knows what each agent is doing ----
+// ---- Claude Code hooks: how Hangar knows what each agent is doing ----
 
 // The hook script lives in ~/.local/share/hangar: one place for every version and for both Cursor
 // and VS Code
@@ -1674,7 +1725,7 @@ const isOurHook = (cmd) => /hangar\/agent-hook\.js/.test(cmd || '');
 async function ensureHooks(ctx, hookPath) {
   let settings;
   try { settings = fs.existsSync(CLAUDE_SETTINGS) ? JSON.parse(fs.readFileSync(CLAUDE_SETTINGS, 'utf8')) : {}; } catch {
-    vscode.window.showWarningMessage(`The Hangar couldn't read ${CLAUDE_SETTINGS}, so agent status stays off.`);
+    vscode.window.showWarningMessage(`Hangar couldn't read ${CLAUDE_SETTINGS}, so agent status stays off.`);
     return;
   }
   const node = await nodePath();
@@ -1689,23 +1740,34 @@ async function ensureHooks(ctx, hookPath) {
   if (installed && !node) return;
   if (!installed && ctx.globalState.get('hangar.hooksDeclined')) return;
   const pick = installed ? 'Add hooks' : await vscode.window.showInformationMessage(
-    'Show what each agent is doing (working, waiting on you, idle) in the Hangar?',
-    { modal: true, detail: `Adds Claude Code hooks to ${CLAUDE_SETTINGS}. They only act for Claudes the Hangar starts.` },
+    'Show what each agent is doing (working, waiting on you, idle) in Hangar?',
+    { modal: true, detail: `Adds Claude Code hooks to ${CLAUDE_SETTINGS}. They only act for Claudes Hangar starts.` },
     'Add hooks', 'Not now');
   if (pick !== 'Add hooks') {
     if (pick === 'Not now') ctx.globalState.update('hangar.hooksDeclined', true);
     return;
   }
+  // Read again right before writing (another window, or Claude itself, may have changed it since),
+  // and written next to the real file (settings.json is often a symlink into a dotfiles repo) then
+  // renamed into place, so nothing ever sees half a file
+  fs.mkdirSync(path.dirname(CLAUDE_SETTINGS), { recursive: true });
+  let target = CLAUDE_SETTINGS;
+  try { target = fs.realpathSync(CLAUDE_SETTINGS); } catch {}
+  try { settings = fs.existsSync(target) ? JSON.parse(fs.readFileSync(target, 'utf8')) : {}; } catch { return; }
+  const fresh = settings.hooks || {};
   for (const [event, state] of Object.entries(HOOK_EVENTS)) {
     // Drop older Hangar entries for this event, keep everything else as it is
-    const groups = (hooks[event] || []).map((g) => ({ ...g, hooks: (g.hooks || []).filter((h) => !isOurHook(h.command)) }))
+    const groups = (fresh[event] || []).map((g) => ({ ...g, hooks: (g.hooks || []).filter((h) => !isOurHook(h.command)) }))
       .filter((g) => g.hooks.length);
     groups.push({ hooks: [{ type: 'command', command: command(state), timeout: 5, async: true }] });
-    hooks[event] = groups;
+    fresh[event] = groups;
   }
-  settings.hooks = hooks;
-  fs.mkdirSync(path.dirname(CLAUDE_SETTINGS), { recursive: true });
-  fs.writeFileSync(CLAUDE_SETTINGS, JSON.stringify(settings, null, 2) + '\n');
+  settings.hooks = fresh;
+  const tmp = path.join(path.dirname(target), `.${path.basename(target)}.${process.pid}.tmp`);
+  let mode = 0o600;
+  try { mode = fs.statSync(target).mode & 0o777; } catch {}
+  fs.writeFileSync(tmp, JSON.stringify(settings, null, 2) + '\n', { mode });
+  fs.renameSync(tmp, target);
   if (installed) vscode.window.setStatusBarMessage('Hangar: agent status hooks updated', 5000);
   else vscode.window.showInformationMessage('Agent status is on. Claudes started from now on report it.');
 }
@@ -1901,7 +1963,7 @@ function activate(ctx) {
     invalidate();
     poll();
   }));
-  // The Hangar window opens with the Hangar showing in its sidebar
+  // The Hangar window opens with Hangar showing in its sidebar
   if (isHangarWindow() && vscode.workspace.getConfiguration('hangar').get('showOnStartup', true)) {
     vscode.commands.executeCommand('workbench.view.extension.hangar');
   }

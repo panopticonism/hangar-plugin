@@ -7,7 +7,7 @@
 // <swiftbar.hideDisablePlugin>true</swiftbar.hideDisablePlugin>
 // <swiftbar.hideSwiftBar>true</swiftbar.hideSwiftBar>
 //
-// The Hangar in the Mac menu bar (SwiftBar runs this every 5 seconds). The Hangar extension installs
+// Hangar in the Mac menu bar (SwiftBar runs this every 5 seconds). The Hangar extension installs
 // it, with the Node it runs on, when its hangar.menuBar setting is on, and keeps it up to date. It reads:
 //   ~/.cache/hangar/status.json   the Hangar window's chats, tickets, PRs and CI, and which Claudes run
 //   ~/.cache/hangar/agents/       what each Claude is doing, from its hooks (fresher than the above)
@@ -107,7 +107,7 @@ function since(seconds) {
 const clean = (t) => String(t).replace(/\|/g, '¦').replace(/[\n\r\u2028\u2029]/g, ' ').replace(/[\u0000-\u001f\u007f]/g, '');
 const DIM = '\u001b[90m';
 const RESET = '\u001b[0m';
-// The Hangar's own links carry its key, so it opens them without asking (a link from anywhere else asks)
+// Hangar's own links carry its key, so it opens them without asking (a link from anywhere else asks)
 let key = '';
 try { key = fs.readFileSync(path.join(HOME, '.local/share/hangar/link-key'), 'utf8').trim(); } catch {}
 const link = (name) => `${scheme}://${extension}/open?ticket=${encodeURIComponent(name)}${key ? `&key=${key}` : ''}`;
@@ -123,7 +123,7 @@ const count = (s) => items.filter((it) => it.state === s).length;
 const needs = count('needs-input');
 const working = count('working');
 
-// The menu bar: the hangar, then what's waiting on you, else what's working, and failing CI
+// The menu bar: Hangar's icon, then what's waiting on you, else what's working, and failing CI
 const iconFile = path.join(HOME, '.local/share/hangar/menubar.png');
 let icon = '';
 try { icon = ` templateImage=${fs.readFileSync(iconFile).toString('base64')}`; } catch { icon = ' sfimage=airplane'; }

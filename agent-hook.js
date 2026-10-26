@@ -1,7 +1,7 @@
 #!/usr/bin/env node
-// Claude Code hook for the Hangar: records what a ticket's or chat's Claude is doing (working,
+// Claude Code hook for Hangar: records what a ticket's or chat's Claude is doing (working,
 // needs-input, idle, ended) in ~/.cache/hangar/agents/<ticket>.json, with the session id so a
-// stopped one can be resumed. Only sessions the Hangar started have HANGAR_TICKET; for any other it
+// stopped one can be resumed. Only sessions Hangar started have HANGAR_TICKET; for any other it
 // does nothing.
 // Usage (from ~/.claude/settings.json hooks): node agent-hook.js <state>, hook JSON on stdin.
 const fs = require('fs');
@@ -33,7 +33,7 @@ try { known = JSON.parse(fs.readFileSync(file, 'utf8')).session || ''; } catch {
 if (state === 'ended' && session && known && session !== known) process.exit(0);
 
 fs.mkdirSync(dir, { recursive: true });
-// Written next to it and renamed into place, so the Hangar never reads a half-written file
+// Written next to it and renamed into place, so Hangar never reads a half-written file
 const tmp = path.join(dir, `.${path.basename(file)}.${process.pid}.tmp`);
 fs.writeFileSync(tmp, JSON.stringify({ ticket, state, session: session || known, at: Math.floor(Date.now() / 1000) }));
 fs.renameSync(tmp, file);

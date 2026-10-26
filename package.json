@@ -54,7 +54,7 @@
 				"hangar.root": {
 					"type": "string",
 					"default": "",
-					"description": "The folder whose repos and worktrees the Hangar shows, and where each Claude starts: a repo, a folder of repos, or a meta-repo. Empty: the window's first folder."
+					"description": "The folder whose repos and worktrees Hangar shows, and where each Claude starts: a repo, a folder of repos, or a meta-repo. Empty: the window's first folder."
 				},
 				"hangar.roots": {
 					"type": "array",
@@ -62,17 +62,17 @@
 						"type": "string"
 					},
 					"default": [],
-					"description": "More projects for the Hangar besides the window's own folder: each a repo, a folder of repos, or a meta-repo. Projects added with Add project… are kept separately."
+					"description": "More projects for Hangar besides the window's own folder: each a repo, a folder of repos, or a meta-repo. Projects added with Add project… are kept separately."
 				},
 				"hangar.showOnStartup": {
 					"type": "boolean",
 					"default": true,
-					"description": "Show the Hangar in the sidebar when the Hangar window opens."
+					"description": "Show Hangar in the sidebar when the Hangar window opens."
 				},
 				"hangar.menuBar": {
 					"type": "boolean",
 					"default": false,
-					"markdownDescription": "Show the Hangar in the Mac menu bar: what each Claude is doing and failing CI. Needs [SwiftBar](https://swiftbar.app); turning this on puts a script in SwiftBar's plugin folder, and turning it off takes it out again."
+					"markdownDescription": "Show Hangar in the Mac menu bar: what each Claude is doing and failing CI. Needs [SwiftBar](https://swiftbar.app); turning this on puts a script in SwiftBar's plugin folder, and turning it off takes it out again."
 				}
 			}
 		},
@@ -250,7 +250,7 @@
 			},
 			{
 				"command": "hangar.removeProject",
-				"title": "Remove project from the Hangar",
+				"title": "Remove project from Hangar",
 				"category": "Hangar",
 				"icon": "$(close)"
 			}

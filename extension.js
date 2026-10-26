@@ -1753,7 +1753,10 @@ async function ensureHooks(ctx, hookPath) {
   fs.mkdirSync(path.dirname(CLAUDE_SETTINGS), { recursive: true });
   let target = CLAUDE_SETTINGS;
   try { target = fs.realpathSync(CLAUDE_SETTINGS); } catch {}
-  try { settings = fs.existsSync(target) ? JSON.parse(fs.readFileSync(target, 'utf8')) : {}; } catch { return; }
+  try { settings = fs.existsSync(target) ? JSON.parse(fs.readFileSync(target, 'utf8')) : {}; } catch {
+    vscode.window.showWarningMessage(`Hangar couldn't read ${CLAUDE_SETTINGS}, so agent status stays off.`);
+    return;
+  }
   const fresh = settings.hooks || {};
   for (const [event, state] of Object.entries(HOOK_EVENTS)) {
     // Drop older Hangar entries for this event, keep everything else as it is

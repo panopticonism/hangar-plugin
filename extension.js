@@ -316,6 +316,11 @@ function readDrafts({ prune = true } = {}) {
     try {
       const d = JSON.parse(fs.readFileSync(path.join(DRAFTS_DIR, f), 'utf8'));
       if (!d.ticket) continue;
+      // A removed chat lets go of the branches it held, so they show as tickets of their own again
+      if (isChat(d.ticket) && prune && !fs.existsSync(chatFile(chatId(d.ticket)))) {
+        fs.unlinkSync(path.join(DRAFTS_DIR, f));
+        continue;
+      }
       // A ticket that took branches keeps each one while it has worktrees (that's what holds them
       // under it); any other draft is done once its ticket has a worktree
       if (d.adopted && prune) {
@@ -412,10 +417,12 @@ function tickets() {
   if (ticketsMemo) return ticketsMemo.list;
   const byName = new Map();
   for (const wt of worktrees.values()) {
+    // A chat's worktrees show under the chat (worktreesOf), not as a ticket
+    if (isChat(wt.ticket)) continue;
     if (!byName.has(wt.ticket)) byName.set(wt.ticket, []);
     byName.get(wt.ticket).push(wt);
   }
-  for (const name of Object.keys(drafts)) if (!byName.has(name)) byName.set(name, []);
+  for (const name of Object.keys(drafts)) if (!isChat(name) && !byName.has(name)) byName.set(name, []);
   // A ticket is one ticket even if its repos are in different projects: it's listed (and its Claude
   // starts) in the first project, in Hangar order (this window's own first), that has one of them
   const order = projects();
@@ -449,6 +456,15 @@ function resumableSession(name, cwd) {
 }
 
 const ticketByName = (name) => { tickets(); return ticketsMemo.byName.get(name); };
+// The worktrees of a ticket, or of a chat whose Claude made some (they're claimed for it like a
+// ticket's, and go with it when it becomes a ticket)
+const worktreesOf = (name) => isChat(name)
+  ? [...worktrees.values()].filter((w) => w.ticket === name).sort((a, b) => a.repo.localeCompare(b.repo))
+  : ticketByName(name)?.worktrees || [];
+// A chat or ticket as switching to it needs it: its name and worktrees
+const threadOf = (name) => isChat(name)
+  ? (chats[chatId(name)] ? { name, worktrees: worktreesOf(name) } : null)
+  : ticketByName(name);
 
 // One scan at a time. A scan asked for while one is running (say right after a delete) runs again
 // once it finishes, so it sees the change instead of reusing results from before it.
@@ -487,7 +503,7 @@ function poll() {
 const CI_COLOR = { pass: 'testing.iconPassed', fail: 'testing.iconFailed', pending: 'testing.iconQueued' };
 
 function folderName(wt) {
-  return `${wt.pr ? `#${wt.pr.number} ` : ''}${wt.ticket} · ${wt.repo}`;
+  return `${wt.pr ? `#${wt.pr.number} ` : ''}${displayName(wt.ticket)} · ${wt.repo}`;
 }
 
 // CI only matters while a PR is still open (or a draft); merged and closed ones are done
@@ -592,7 +608,7 @@ class Colors {
     if (uri.scheme !== 'file') return undefined;
     // Worktree folders (the Explorer's roots for the active ticket) take their ticket's color
     const wt = [...worktrees.values()].find((w) => w.dir === uri.fsPath);
-    return wt ? { color: ticketColor(wt.ticket), tooltip: wt.ticket } : undefined;
+    return wt ? { color: ticketColor(wt.ticket), tooltip: displayName(wt.ticket) } : undefined;
   }
 }
 const colors = new Colors();
@@ -616,7 +632,7 @@ class Tree {
     const shown = JSON.stringify({
       activeTicket, removing: [...removing], drafts, colorOf,
       agents: Object.entries(agents).map(([name, a]) => [name, a.state, a.session, since(a.at)]),
-      chats: Object.values(chats).map((c) => [c.id, c.title]),
+      chats: Object.values(chats).map((c) => [c.id, c.title, worktreesOf(`chat:${c.id}`).map((w) => [w.id, w.branch, w.local, w.pr])]),
       tickets: tickets().map((t) => [t.name, !!t.draft, t.worktrees.map((w) => [w.id, w.branch, w.local, w.pr])]),
       terminals: vscode.window.terminals.map((t) => t.name),
     });
@@ -643,8 +659,11 @@ class Tree {
       const list = tickets().filter((t) => t.root === el.root).map((t) => ({ kind: 'ticket', name: t.name }));
       return list.length ? list : [{ kind: 'empty', what: 'tickets', root: el.root }];
     }
-    // Like a ticket, a chat's Claude status gets its own row under it
-    if (el.kind === 'chat') return [{ kind: 'agent', name: `chat:${el.id}` }];
+    // Like a ticket, a chat's Claude status gets its own row under it, then any worktrees it made
+    if (el.kind === 'chat') {
+      const name = `chat:${el.id}`;
+      return [{ kind: 'agent', name }, ...worktreesOf(name).map((w) => ({ kind: 'wt', id: w.id, ticket: name }))];
+    }
     if (el.kind === 'ticket') {
       const t = ticketByName(el.name);
       if (t?.draft) return [{ kind: 'agent', name: el.name }, { kind: 'norepos', name: el.name }];
@@ -903,16 +922,17 @@ function isHangarWindow() {
 // The window's folders after its own (the root): a ticket's worktrees, or the folder a chat runs in if
 // it's another one. When Claude adds (or you remove) a worktree, the window follows without switching
 function windowFolders(name, t) {
+  const wts = t.worktrees.filter((w) => !removing.has(w.id)).map((w) => ({ uri: vscode.Uri.file(w.dir), name: folderName(w) }));
   if (isChat(name)) {
     const root = cwdOf(name);
-    return root && root !== ROOT ? [{ uri: vscode.Uri.file(root), name: projectName(root) }] : [];
+    return [...(root && root !== ROOT ? [{ uri: vscode.Uri.file(root), name: projectName(root) }] : []), ...wts];
   }
-  return t.worktrees.filter((w) => !removing.has(w.id)).map((w) => ({ uri: vscode.Uri.file(w.dir), name: folderName(w) }));
+  return wts;
 }
 
 function syncFolders() {
-  if (!isHangarWindow() || !activeTicket || isChat(activeTicket)) return;
-  const t = ticketByName(activeTicket);
+  if (!isHangarWindow() || !activeTicket) return;
+  const t = threadOf(activeTicket);
   if (!t) return;
   const wanted = windowFolders(activeTicket, t);
   const current = (vscode.workspace.workspaceFolders || []).slice(1);
@@ -921,7 +941,7 @@ function syncFolders() {
 }
 
 async function openTicket(name, { showClaude = true } = {}) {
-  const t = isChat(name) ? (chats[chatId(name)] ? { name, worktrees: [] } : null) : ticketByName(name);
+  const t = threadOf(name);
   if (!t) return;
   const wanted = windowFolders(name, t);
   if (!isHangarWindow()) {
@@ -963,9 +983,13 @@ function claudePrompt(name) {
   const root = rootOf(name);
   const repos = repoNames(root).map((r) => ({ name: r, dir: repoDir(r, root) }));
   if (isChat(name)) {
+    const wts = worktreesOf(name);
     return [
-      "This is a chat in the `folder` below, not tied to a ticket or branch. If it grows into work that needs its own branch or several repos, say so: the user can turn the chat into a ticket from their Hangar panel, and you'll get its worktrees.",
-      promptFacts({ folder: cwdOf(name), repos }),
+      "This is a chat in the `folder` below, not tied to a ticket or branch. Don't create branches or worktrees on your own: if the work needs its own branch or several repos, say so and ask the user to turn the chat into a ticket first (from their Hangar panel). You keep this conversation, and as the ticket's Claude you're told its branch and worktrees.",
+      ...(wts.length ? ["The chat already has the `worktrees` below: do any editing for them there, not in the repos' own checkouts."] : []),
+      `If you create a worktree anyway (say the user asks you to), run \`open ${link('added', '&branch=<branch>')}\` right after, each time, with its branch URL-encoded in place of <branch>: it shows under this chat in the user's Hangar, and goes with the chat when it becomes a ticket.`,
+      `To show the user the changes in this chat's worktrees, run \`open ${link('diff')}\`: it opens the diff in their Hangar window.`,
+      promptFacts({ folder: cwdOf(name), ...(wts.length ? { worktrees: wts.map((w) => ({ repo: w.repo, dir: w.dir, branch: w.branch })) } : {}), repos }),
     ].join('\n\n');
   }
   const t = ticketByName(name);
@@ -1316,11 +1340,14 @@ function closeClaude(name) {
 
 async function forgetChat(id) {
   const c = chats[id];
+  const held = worktreesOf(`chat:${id}`).length;
   const ok = await vscode.window.showWarningMessage(`Remove the chat "${c?.title || id}" from the list?`,
-    { modal: true, detail: 'Its conversation stays in Claude’s history (claude --resume).' }, 'Remove');
+    { modal: true, detail: `Its conversation stays in Claude’s history (claude --resume).${held ? ' Its worktrees stay too, listed as tickets of their own.' : ''}` }, 'Remove');
   if (ok !== 'Remove') return;
   claudeTerminalFor(`chat:${id}`)?.dispose();
-  for (const f of [chatFile(id), path.join(AGENTS_DIR, `chat:${id}.json`)]) try { fs.unlinkSync(f); } catch {}
+  // Its worktrees go back to the tickets their branches name
+  for (const f of [chatFile(id), path.join(AGENTS_DIR, `chat:${id}.json`), draftFile(`chat:${id}`)]) try { fs.unlinkSync(f); } catch {}
+  delete drafts[`chat:${id}`];
   if (activeTicket === `chat:${id}`) activeTicket = null;
   delete chats[id];
   delete agents[`chat:${id}`];
@@ -1328,8 +1355,9 @@ async function forgetChat(id) {
   await poll();
 }
 
-const ticketPrompt = (title) => vscode.window.showInputBox({
+const ticketPrompt = (title, value) => vscode.window.showInputBox({
   title,
+  value,
   prompt: 'The ticket ID, or the branch if you already know it.',
   placeHolder: 'ABC-123  or  feature/abc-123-short-description',
   validateInput: (v) => {
@@ -1349,7 +1377,8 @@ async function promoteChat(id) {
     vscode.window.showWarningMessage('Claude is still working in this chat. Turn it into a ticket thread once it’s idle.');
     return;
   }
-  const input = await ticketPrompt(`Turn "${chats[id]?.title || 'this chat'}" into a ticket thread`);
+  // A chat whose Claude made a branch most likely becomes that branch's ticket
+  const input = await ticketPrompt(`Turn "${chats[id]?.title || 'this chat'}" into a ticket thread`, draftBranches(drafts[name0] || {})[0]);
   if (!input) return;
   const v = input.trim();
   const { name } = parseTicketInput(v);
@@ -1413,8 +1442,11 @@ async function moveChat(id, name, v, a) {
   const to = ticketByName(name)?.root || chats[id]?.root || ROOT;
   if (!ticketByName(name)) {
     fs.mkdirSync(DRAFTS_DIR, { recursive: true });
-    writeJson(draftFile(name), { ticket: name, branch: parseTicketInput(v).branch, root: chats[id]?.root || ROOT, at: Math.floor(Date.now() / 1000) });
+    drafts[name] = { ticket: name, branch: parseTicketInput(v).branch, root: chats[id]?.root || ROOT, at: Math.floor(Date.now() / 1000) };
+    writeJson(draftFile(name), drafts[name]);
   }
+  // The worktrees the chat's Claude made go with it (and the chat's claim on them goes)
+  for (const branch of draftBranches(drafts[name0] || {})) claimBranch(name, branch);
   if (session) {
     try { moveConversation(session, from, to); } catch (err) {
       vscode.window.showWarningMessage(`Couldn't move the chat's conversation to ${projectName(to)}, so the ticket starts a new one: ${err.message}`);
@@ -1565,18 +1597,18 @@ async function handleRequestsOnce() {
     if (!exists) continue;
     if (!req.trusted && !(await confirmLink(req))) continue;
     if (req.action === 'open') await openTicket(req.ticket);
-    // A ticket's Claude added a repo: its branch is the ticket's, whatever it's called; show it if the
-    // window is on that ticket, never switch
+    // A ticket's (or chat's) Claude added a repo: its branch is the ticket's, whatever it's called;
+    // show it if the window is on that ticket, never switch
     if (req.action === 'added') {
       if (req.trusted && req.branch && checkBranch(req.branch) === undefined) claimBranch(req.ticket, req.branch);
       await poll();
       if (req.ticket === activeTicket) await openTicket(req.ticket, { showClaude: false });
     }
     if (req.action === 'diff') {
-      const t = ticketByName(req.ticket);
-      if (!t) continue;
+      const t = threadOf(req.ticket);
+      if (!t?.worktrees.length) continue;
       if (t.name !== activeTicket) await openTicket(t.name, { showClaude: false });
-      await showDiff(t.worktrees.map((w) => w.id), t.name);
+      await showDiff(t.worktrees.map((w) => w.id), displayName(t.name));
     }
   }
 }
@@ -1781,8 +1813,8 @@ async function ensureHooks(ctx, hookPath) {
 async function diffSelection(el, selection) {
   const items = selection?.length ? selection : [el];
   const ids = [...new Set(items.flatMap((it) => ['ticket', 'agent'].includes(it.kind)
-    ? (ticketByName(it.name)?.worktrees || []).map((w) => w.id) : [it.id]))];
-  const names = [...new Set(ids.map((id) => worktrees.get(id)?.ticket).filter(Boolean))];
+    ? worktreesOf(it.name).map((w) => w.id) : [it.id]))];
+  const names = [...new Set(ids.map((id) => worktrees.get(id)?.ticket).filter(Boolean))].map(displayName);
   if (!ids.length) return;
   await showDiff(ids, names.length > 2 ? `${names.length} tickets` : names.join(' + '));
 }
@@ -1790,7 +1822,7 @@ async function diffSelection(el, selection) {
 // Right-click actions on a repo, branch or PR row
 const worktreeOf = (el) => worktrees.get(el?.id);
 function openTerminalIn(w) {
-  vscode.window.createTerminal({ name: `${w.repo} · ${w.ticket}`, cwd: w.dir, env: claudeEnv(), iconPath: new vscode.ThemeIcon('terminal') }).show();
+  vscode.window.createTerminal({ name: `${w.repo} · ${displayName(w.ticket)}`, cwd: w.dir, env: claudeEnv(), iconPath: new vscode.ThemeIcon('terminal') }).show();
 }
 async function copy(text, what) {
   await vscode.env.clipboard.writeText(text);
@@ -1812,7 +1844,7 @@ async function removeWorktree(w) {
   tree.refresh();
   try {
     const useGtr = await hasGtr();
-    await inPanel('hangar.panel', `Removing the ${w.repo} worktree of ${w.ticket}…`, async () => {
+    await inPanel('hangar.panel', `Removing the ${w.repo} worktree of ${displayName(w.ticket)}…`, async () => {
       if (useGtr) return run('git', ['-C', w.repoDir, 'gtr', 'rm', w.branch, '--delete-branch', '--yes']);
       await git(w.repoDir, ['worktree', 'remove', w.dir]);
       // Nothing unpushed (Remove only shows then), so the local branch can go
@@ -1880,7 +1912,7 @@ function activate(ctx) {
       const w = worktrees.get(el.id);
       if (!w) return;
       if (w.ticket !== activeTicket) await openTicket(w.ticket, { showClaude: false });
-      await showDiff([w.id], `${w.ticket} · ${w.repo}`);
+      await showDiff([w.id], `${displayName(w.ticket)} · ${w.repo}`);
     }),
     // The window's folders can also change from outside (someone edits the workspace file)
     vscode.workspace.onDidChangeWorkspaceFolders(() => {

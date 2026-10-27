@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+- A branch a chat's Claude makes stays with the chat: its worktree shows under the chat, not as a ticket of its own with a second Claude, and goes with it when the chat becomes a ticket (whatever the ticket is called). *Turn it into a ticket thread* suggests that branch.
+- A chat's Claude is told to ask for the chat to become a ticket before it makes a branch, and to report any worktree it makes anyway. It can show you a chat's worktree changes, like a ticket's Claude.
+- Removing a chat puts the worktrees it held back under tickets of their own.
+
 ## 3.0.1
 
 - An open diff tab picks up files that start or stop being changed again (newer editors add the file count to its title, which hid it from Hangar, and kept the files it was opened with).

@@ -2,7 +2,7 @@
 
 Claude Code chats and tickets in the editor's sidebar, each with its own Claude, and every git worktree under the root folder grouped by ticket, with its branch, PR and CI. One window switches between them, and diffs open in the editor's multi-file diff with the working side live.
 
-- **Chats**: Claude in a folder with no ticket or branch. When a chat grows into real work, *Turn it into a ticket thread* keeps the conversation and gives it worktrees. A chat that ran in a folder inside its project has its conversation moved to the project's history, where the ticket's Claude runs.
+- **Chats**: Claude in a folder with no ticket or branch. When a chat grows into real work, *Turn it into a ticket thread* keeps the conversation and gives it worktrees. If the chat's Claude made a branch anyway, its worktree shows under the chat and goes with it. A chat that ran in a folder inside its project has its conversation moved to the project's history, where the ticket's Claude runs.
 - **Tickets**: Claude at the root plus a worktree per repo it touches, all on one branch. Worktrees are found from git itself, wherever they live, and filed under the ticket their branch names (`bug/abc-123-…` → ABC-123), the ticket that was started with that branch, or the ticket whose Claude reported making it. One filed under the wrong ticket can be moved with *Move to ticket…*.
 
 Works in VSCodium, Cursor and VS Code, **on macOS**. Other systems aren't supported yet.
@@ -48,7 +48,7 @@ Each Claude starts with a short note on its chat or ticket, appended to its syst
 | --- | --- |
 | `~/.claude/settings.json` | The agent status hooks, after you say yes. |
 | `~/.cache/hangar/chats/<id>.json` | One per chat: `id`, `title`, `root` (the project it's listed under), `cwd` (where its Claude runs, if not `root`), `session` (the conversation to resume), `at`. |
-| `~/.cache/hangar/drafts/` | Tickets that have no worktrees yet. |
+| `~/.cache/hangar/drafts/` | Tickets that have no worktrees yet, and the branches a ticket or chat holds that don't carry its name. |
 | `~/.cache/hangar/agents/` | What each Claude is doing, written by the hook. |
 | `~/.cache/hangar/requests/` | Links (`<scheme>://panopticonism.hangar/{open,diff}?ticket=…`) handed to the Hangar window. |
 | `~/.cache/hangar/prompts/` | What each Claude is told when it starts. |

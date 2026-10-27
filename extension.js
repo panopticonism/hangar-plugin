@@ -197,7 +197,8 @@ function claimBranch(ticket, branch) {
     if (d.ticket === ticket || !d.adopted || !draftBranches(d).includes(branch)) continue;
     const rest = draftBranches(d).filter((b) => b !== branch);
     if (rest.length) {
-      drafts[d.ticket] = { ...d, branch: rest[0], branches: rest };
+      const claimedAt = Object.fromEntries(Object.entries(d.claimedAt || {}).filter(([b]) => b !== branch));
+      drafts[d.ticket] = { ...d, branch: rest[0], branches: rest, claimedAt };
       writeJson(draftFile(d.ticket), drafts[d.ticket]);
     } else {
       try { fs.unlinkSync(draftFile(d.ticket)); } catch {}
@@ -208,7 +209,10 @@ function claimBranch(ticket, branch) {
   const prev = drafts[ticket] || { ticket, root: rootOf(ticket), at: Math.floor(Date.now() / 1000) };
   // A draft's planned branch stays its `branch`; a ticket that already holds branches adds this one
   const branches = prev.adopted ? [...draftBranches(prev), branch] : [branch];
-  const d = { ...prev, branch: prev.branch || branch, branches: [...new Set(branches)], adopted: true };
+  // When it was claimed: a scan already running may have listed the repo's worktrees before this
+  // one was made, and mustn't drop the claim for not having seen it (readDrafts)
+  const d = { ...prev, branch: prev.branch || branch, branches: [...new Set(branches)], adopted: true,
+    claimedAt: { ...prev.claimedAt, [branch]: Date.now() } };
   fs.mkdirSync(DRAFTS_DIR, { recursive: true });
   writeJson(draftFile(ticket), d);
   drafts[ticket] = d;
@@ -310,7 +314,9 @@ async function baseRef(wt) {
 // ticket has a worktree.
 const DRAFTS_DIR = path.join(HOME, '.cache/hangar/drafts');
 let drafts = {};
-function readDrafts({ prune = true } = {}) {
+// `since`: when the scan doing this started; a branch claimed after that is kept even though the scan
+// found no worktree on it
+function readDrafts({ prune = true, since } = {}) {
   const next = {};
   for (const f of jsonFiles(DRAFTS_DIR)) {
     try {
@@ -324,10 +330,12 @@ function readDrafts({ prune = true } = {}) {
       // A ticket that took branches keeps each one while it has worktrees (that's what holds them
       // under it); any other draft is done once its ticket has a worktree
       if (d.adopted && prune) {
-        const held = draftBranches(d).filter((b) => [...worktrees.values()].some((w) => w.branch === b));
+        const fresh = (b) => since != null && (d.claimedAt?.[b] || 0) >= since;
+        const held = draftBranches(d).filter((b) => fresh(b) || [...worktrees.values()].some((w) => w.branch === b));
         if (!held.length) { fs.unlinkSync(path.join(DRAFTS_DIR, f)); continue; }
         if (held.length < draftBranches(d).length) {
-          Object.assign(d, { branch: held[0], branches: held });
+          const claimedAt = Object.fromEntries(Object.entries(d.claimedAt || {}).filter(([b]) => held.includes(b)));
+          Object.assign(d, { branch: held[0], branches: held, claimedAt });
           writeJson(path.join(DRAFTS_DIR, f), d);
         }
       } else if (!d.adopted && prune && [...worktrees.values()].some((w) => w.ticket === d.ticket)) {
@@ -481,9 +489,10 @@ function poll() {
     // Worktrees are filed under the drafts that claimed their branch, so on the first scan those are
     // read before the worktrees are found (and kept: none of their worktrees has been seen yet)
     if (!worktrees.size) readDrafts({ prune: false });
+    const started = Date.now();
     await discover();
     await Promise.all([...worktrees.values()].map(localStatus));
-    readDrafts();
+    readDrafts({ since: started });
     readAgents();
     readChats();
     assignColors();

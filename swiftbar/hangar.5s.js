@@ -113,12 +113,13 @@ try { key = fs.readFileSync(path.join(HOME, '.local/share/hangar/link-key'), 'ut
 const link = (name) => `${scheme}://${extension}/open?ticket=${encodeURIComponent(name)}${key ? `&key=${key}` : ''}`;
 
 const items = [
-  ...chats.map((c) => ({ name: c.name, label: clean(c.title), note: c.folder, chat: true, color: c.color })),
-  ...tickets.map((t) => ({ name: t.name, label: clean(t.name), note: t.draft ? 'no repos yet' : t.repos.join(', '), ticket: t, color: t.color })),
+  // A chat's worktrees (its Claude made some) show like a ticket's: their CI and PRs
+  ...chats.map((c) => ({ name: c.name, label: clean(c.title), note: c.folder, chat: true, thread: c, color: c.color })),
+  ...tickets.map((t) => ({ name: t.name, label: clean(t.name), note: t.draft ? 'no repos yet' : t.repos.join(', '), thread: t, color: t.color })),
 ].map((it) => ({ ...it, state: stateOf(it.name), at: agents[it.name]?.at || 0 }));
 items.sort((a, b) => b.at - a.at);
 
-const failing = tickets.filter((t) => t.ci === 'fail');
+const failing = items.filter((it) => it.thread?.ci === 'fail');
 const count = (s) => items.filter((it) => it.state === s).length;
 const needs = count('needs-input');
 const working = count('working');
@@ -131,14 +132,14 @@ const title = [needs ? `${needs} waiting on you` : working ? `${working} working
 const out = [`${title}|${icon}${needs ? ` color=${pick('#b08800,#e3b341')}` : ''}`, '---'];
 
 const row = (it) => {
-  const ci = it.ticket?.ci === 'fail' ? ' ✗ CI failed' : '';
+  const ci = it.thread?.ci === 'fail' ? ' ✗ CI failed' : '';
   const when = it.state === 'needs-input' || it.state === 'working' ? ` · ${since(it.at)}` : '';
   // Its icon in the chat's or ticket's own color, the one it has in the Hangar panel
   const icon = /^#[0-9a-f]{6},#[0-9a-f]{6}$/i.test(it.color || '')
     ? `image=${mark(pick(it.color), it.chat ? 'chat' : 'tag')}`
     : `sfimage=${it.chat ? 'bubble.left' : 'tag'}`;
   out.push(`${it.label}${it.note ? `${DIM}  ${clean(it.note)}${RESET}` : ''}${ci}${when} | href=${link(it.name)} ${icon} ansi=true${ci ? ` color=${pick('#cf222e,#ff7b72')}` : ''}`);
-  for (const pr of it.ticket?.prs || []) {
+  for (const pr of it.thread?.prs || []) {
     const checks = { pass: 'CI passed', fail: 'CI failed', pending: 'CI running', none: '' }[pr.checks] || '';
     out.push(`--${clean(pr.repo)}: PR #${pr.number} ${String(pr.state).toLowerCase()}${checks && ['OPEN', 'DRAFT'].includes(pr.state) ? ` · ${checks}` : ''} | href=${pr.url}`);
   }

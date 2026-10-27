@@ -753,7 +753,8 @@ class Tree {
     const item = new vscode.TreeItem(active ? { label, highlights: [[0, label.length]] } : label, vscode.TreeItemCollapsibleState.Expanded);
     item.id = `chat:${c.id}`;
     item.contextValue = running ? 'chat.live' : 'chat.stopped';
-    item.description = active ? '● here' : '';
+    const ci = worstChecks(worktreesOf(name));
+    item.description = [active ? '● here' : '', ci === 'fail' ? 'CI failing' : ''].filter(Boolean).join(' · ');
     item.resourceUri = ticketUri(name);
     item.iconPath = new vscode.ThemeIcon('comment-discussion', ticketColor(name));
     item.tooltip = `${running ? 'Show this chat' : 'Open this chat again (resumes the conversation)'}\n${chatCwd(c).replace(HOME, '~')}`;
@@ -876,9 +877,10 @@ let treeView;
 let statusBar;
 
 function updateStatusBar() {
-  // The badge counts every ticket, whatever this window is on
-  const failing = tickets().filter((x) => worstChecks(x.worktrees) === 'fail').length;
-  treeView.badge = failing ? { value: failing, tooltip: `${failing} ticket(s) with failing CI` } : undefined;
+  // The badge counts every ticket, and every chat with worktrees, whatever this window is on
+  const threads = [...tickets().map((t) => t.worktrees), ...Object.keys(chats).map((id) => worktreesOf(`chat:${id}`))];
+  const failing = threads.filter((wts) => worstChecks(wts) === 'fail').length;
+  treeView.badge = failing ? { value: failing, tooltip: `${failing} ticket(s) or chat(s) with failing CI` } : undefined;
   if (!activeTicket) { statusBar.hide(); return; }
   if (isChat(activeTicket)) {
     statusBar.text = `$(comment-discussion) ${displayName(activeTicket)}`;
@@ -987,7 +989,7 @@ function claudePrompt(name) {
     return [
       "This is a chat in the `folder` below, not tied to a ticket or branch. Don't create branches or worktrees on your own: if the work needs its own branch or several repos, say so and ask the user to turn the chat into a ticket first (from their Hangar panel). You keep this conversation, and as the ticket's Claude you're told its branch and worktrees.",
       ...(wts.length ? ["The chat already has the `worktrees` below: do any editing for them there, not in the repos' own checkouts."] : []),
-      `If you create a worktree anyway (say the user asks you to), run \`open ${link('added', '&branch=<branch>')}\` right after, each time, with its branch URL-encoded in place of <branch>: it shows under this chat in the user's Hangar, and goes with the chat when it becomes a ticket.`,
+      `If the user asks for a branch anyway, never switch a repo's own checkout to it: create it as a worktree with \`${addRepoCommand()}\`, filling in the repo's \`dir\` from the facts below and the branch, each shell-quoted, and do the editing there. Right after, each time, run \`open ${link('added', '&branch=<branch>')}\` with its branch URL-encoded in place of <branch>: it shows under this chat in the user's Hangar, and goes with the chat when it becomes a ticket.`,
       `To show the user the changes in this chat's worktrees, run \`open ${link('diff')}\`: it opens the diff in their Hangar window.`,
       promptFacts({ folder: cwdOf(name), ...(wts.length ? { worktrees: wts.map((w) => ({ repo: w.repo, dir: w.dir, branch: w.branch })) } : {}), repos }),
     ].join('\n\n');
@@ -1583,6 +1585,17 @@ async function handleRequests() {
   }
 }
 
+// Whether `branch` is already the work of a ticket other than `name`, one that's more than a branch
+// git listed: it was started or claimed in Hangar (a draft) or has had a Claude. A chat's Claude
+// reporting such a branch doesn't take it from that ticket. (A ticket's Claude does: it was told
+// the branch, and Move to ticket… always moves.)
+function ticketWorksOn(name, branch) {
+  if (!isChat(name)) return false;
+  const owner = draftFor(branch) || ticketOf(branch);
+  if (!owner || owner === name || isChat(owner)) return false;
+  return !!(drafts[owner] || agents[owner]) && !!ticketByName(owner);
+}
+
 async function handleRequestsOnce() {
   for (const f of jsonFiles(REQUESTS_DIR, { sorted: true })) {
     const file = path.join(REQUESTS_DIR, f);
@@ -1592,15 +1605,15 @@ async function handleRequestsOnce() {
     if (!req?.ticket) continue;
     const at = Number(f.split('-')[0]);
     if (req.action !== 'added' && at && Date.now() - at > LINK_MAX_AGE_MS) continue;
-    if (!ticketByName(req.ticket)) await poll();
-    const exists = isChat(req.ticket) ? !!chats[chatId(req.ticket)] : !!ticketByName(req.ticket);
+    if (!threadOf(req.ticket)) await poll();
+    const exists = !!threadOf(req.ticket);
     if (!exists) continue;
     if (!req.trusted && !(await confirmLink(req))) continue;
     if (req.action === 'open') await openTicket(req.ticket);
     // A ticket's (or chat's) Claude added a repo: its branch is the ticket's, whatever it's called;
     // show it if the window is on that ticket, never switch
     if (req.action === 'added') {
-      if (req.trusted && req.branch && checkBranch(req.branch) === undefined) claimBranch(req.ticket, req.branch);
+      if (req.trusted && req.branch && checkBranch(req.branch) === undefined && !ticketWorksOn(req.ticket, req.branch)) claimBranch(req.ticket, req.branch);
       await poll();
       if (req.ticket === activeTicket) await openTicket(req.ticket, { showClaude: false });
     }
@@ -1671,6 +1684,11 @@ const MENU_BAR_MARK = '<xbar.title>Hangar</xbar.title>';
 // files itself, and treats this file as out of date (Hangar closed) once it stops being written.
 // It also says which editor and extension wrote it, so the menu opens the same one.
 const STATUS_FILE = path.join(CACHE_DIR, 'status.json');
+// What the menu bar shows of a ticket's or chat's worktrees: their CI, repos and PRs
+const threadStatus = (wts) => ({
+  ci: worstChecks(wts), repos: wts.map((w) => w.repo),
+  prs: wts.filter((w) => w.pr).map((w) => ({ repo: w.repo, number: w.pr.number, state: w.pr.state, url: w.pr.url, checks: w.pr.checks, review: w.pr.review })),
+});
 function writeStatus() {
   if (!isHangarWindow() || !menuBarOn()) return;
   const names = [...Object.values(chats).map((c) => `chat:${c.id}`), ...tickets().map((t) => t.name)];
@@ -1685,10 +1703,9 @@ function writeStatus() {
       active: activeTicket,
       running: names.filter((n) => claudeTerminalFor(n)),
       chats: Object.values(chats).map((c) => ({ name: `chat:${c.id}`, title: c.title || 'New chat', folder: projectName(chatCwd(c)), at: c.at || 0,
-        color: PALETTE_HEX[colorOf[`chat:${c.id}`] ?? 0] })),
+        color: PALETTE_HEX[colorOf[`chat:${c.id}`] ?? 0], ...threadStatus(worktreesOf(`chat:${c.id}`)) })),
       tickets: tickets().map((t) => ({
-        name: t.name, color: PALETTE_HEX[colorOf[t.name] ?? 0], draft: !!t.draft, folder: projectName(t.root), ci: worstChecks(t.worktrees), repos: t.worktrees.map((w) => w.repo),
-        prs: t.worktrees.filter((w) => w.pr).map((w) => ({ repo: w.repo, number: w.pr.number, state: w.pr.state, url: w.pr.url, checks: w.pr.checks, review: w.pr.review })),
+        name: t.name, color: PALETTE_HEX[colorOf[t.name] ?? 0], draft: !!t.draft, folder: projectName(t.root), ...threadStatus(t.worktrees),
       })),
     });
   } catch {}
@@ -1972,7 +1989,9 @@ function activate(ctx) {
   fs.mkdirSync(CHATS_DIR, { recursive: true });
   const agentWatch = fs.watch(AGENTS_DIR, () => { readAgents(); tree.refresh(); });
   const requestWatch = fs.watch(REQUESTS_DIR, () => handleRequests());
-  const draftWatch = fs.watch(DRAFTS_DIR, () => { readDrafts(); tree.refresh(); });
+  // Only a scan drops claims (it has just looked for their worktrees): a claim written the moment a
+  // Claude reports a worktree it made comes before any scan has seen that worktree
+  const draftWatch = fs.watch(DRAFTS_DIR, () => { readDrafts({ prune: false }); tree.refresh(); });
   const chatWatch = fs.watch(CHATS_DIR, () => { readChats(); tree.refresh(); });
   ctx.subscriptions.push({ dispose: () => { agentWatch.close(); requestWatch.close(); draftWatch.close(); chatWatch.close(); } });
   hasGtr();

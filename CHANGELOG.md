@@ -5,6 +5,10 @@
 - A branch a chat's Claude makes stays with the chat: its worktree shows under the chat, not as a ticket of its own with a second Claude, and goes with it when the chat becomes a ticket (whatever the ticket is called). *Turn it into a ticket thread* suggests that branch.
 - A chat's Claude is told to ask for the chat to become a ticket before it makes a branch, and to report any worktree it makes anyway. It can show you a chat's worktree changes, like a ticket's Claude.
 - Removing a chat puts the worktrees it held back under tickets of their own.
+- A chat's Claude asked for a branch anyway makes it as a worktree, not by switching the repo's own checkout.
+- A worktree Claude reports right after making it stays with its chat or ticket: the claim is no longer dropped before the next scan has seen the worktree.
+- A chat's worktrees count like a ticket's: *CI failing* on the chat, in Hangar's badge, and in the menu bar, which lists their PRs.
+- A chat's Claude reporting a branch that a ticket already works on (one started or claimed in Hangar, or that has had a Claude) leaves it with that ticket.
 
 ## 3.0.1
 

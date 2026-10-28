@@ -511,8 +511,14 @@ function poll() {
 
 const CI_COLOR = { pass: 'testing.iconPassed', fail: 'testing.iconFailed', pending: 'testing.iconQueued' };
 
+// A worktree's repo, with its branch when its ticket or chat has another worktree of that repo
+function repoLabel(w) {
+  const twin = [...worktrees.values()].some((o) => o.id !== w.id && o.ticket === w.ticket && o.repo === w.repo);
+  return twin ? `${w.repo} · ${w.branch}` : w.repo;
+}
+
 function folderName(wt) {
-  return `${wt.pr ? `#${wt.pr.number} ` : ''}${displayName(wt.ticket)} · ${wt.repo}`;
+  return `${wt.pr ? `#${wt.pr.number} ` : ''}${displayName(wt.ticket)} · ${repoLabel(wt)}`;
 }
 
 // CI only matters while a PR is still open (or a draft); merged and closed ones are done
@@ -671,17 +677,17 @@ class Tree {
     // Like a ticket, a chat's Claude status gets its own row under it, then any worktrees it made
     if (el.kind === 'chat') {
       const name = `chat:${el.id}`;
-      return [{ kind: 'agent', name }, ...worktreesOf(name).map((w) => ({ kind: 'wt', id: w.id, ticket: name }))];
+      return [{ kind: 'agent', name }, ...repoRows(worktreesOf(name), name)];
     }
     if (el.kind === 'ticket') {
       const t = ticketByName(el.name);
       if (t?.draft) return [{ kind: 'agent', name: el.name }, { kind: 'norepos', name: el.name }];
-      return [{ kind: 'agent', name: el.name },
-        ...(t?.worktrees || []).map((w) => ({ kind: 'wt', id: w.id, ticket: el.name }))];
+      return [{ kind: 'agent', name: el.name }, ...repoRows(t?.worktrees || [], el.name)];
     }
     // The PR sits under its branch, so it reads as that branch's PR
-    if (el.kind === 'wt') return removing.has(el.id) ? [] : [{ kind: 'branch', id: el.id, ticket: el.ticket }];
-    if (el.kind === 'branch') return [{ kind: 'pr', id: el.id, ticket: el.ticket }];
+    if (el.kind === 'wt') return [{ kind: 'branch', id: el.id, ticket: el.ticket }];
+    if (el.kind === 'repo') return el.ids.map((id) => ({ kind: 'branch', id, ticket: el.ticket }));
+    if (el.kind === 'branch') return removing.has(el.id) ? [] : [{ kind: 'pr', id: el.id, ticket: el.ticket }];
     return [];
   }
 
@@ -695,6 +701,7 @@ class Tree {
     if (el.kind === 'agent') return this.agentItem(el.name);
     if (el.kind === 'norepos') return this.noReposItem(el.name);
     const w = worktrees.get(el.id);
+    if (el.kind === 'repo') return this.repoGroupItem(el);
     if (el.kind === 'wt') return this.repoItem(w);
     if (el.kind === 'branch') return this.branchItem(w);
     return this.prItem(w);
@@ -804,30 +811,43 @@ class Tree {
     return item;
   }
 
+  // A repo row only groups: the worktree's actions (and its removing… state) are on its branch row
   repoItem(w) {
-    if (removing.has(w.id)) {
-      const item = new vscode.TreeItem(w.repo, vscode.TreeItemCollapsibleState.None);
-      item.id = `wt:${w.id}`;
-      item.contextValue = 'worktree.removing';
-      item.description = 'removing…';
-      item.iconPath = new vscode.ThemeIcon('loading~spin');
-      item.tooltip = `Removing ${w.dir} and its local branch ${w.branch} (${worktreeTool('remove')})`;
-      return item;
-    }
     const item = new vscode.TreeItem(w.repo, vscode.TreeItemCollapsibleState.Expanded);
     item.id = `wt:${w.id}`;
-    const removable = ['MERGED', 'CLOSED'].includes(w.pr?.state) && !w.local?.dirty && !w.local?.ahead;
-    item.contextValue = `worktree${w.pr?.url ? '.pr' : ''}${removable ? '.removable' : ''}`;
+    item.contextValue = 'repo';
     item.resourceUri = ticketUri(w.ticket, `/${w.id}`);
     item.iconPath = new vscode.ThemeIcon('repo', ticketColor(w.ticket));
     item.tooltip = w.dir;
     return item;
   }
 
+  // Two or more worktrees of one repo in the same ticket or chat: one repo row, a branch row for each
+  repoGroupItem(el) {
+    const wts = el.ids.map((id) => worktrees.get(id)).filter(Boolean);
+    const item = new vscode.TreeItem(el.repo, vscode.TreeItemCollapsibleState.Expanded);
+    item.id = `repo:${el.ticket}:${el.repo}`;
+    item.contextValue = 'repo';
+    item.resourceUri = ticketUri(el.ticket, `/${el.repo}`);
+    item.iconPath = new vscode.ThemeIcon('repo', ticketColor(el.ticket));
+    item.tooltip = wts.map((w) => w.dir).join('\n');
+    return item;
+  }
+
+  // A worktree's branch row: where its actions are
   branchItem(w) {
+    if (removing.has(w.id)) {
+      const item = new vscode.TreeItem(w.branch, vscode.TreeItemCollapsibleState.None);
+      item.id = `branch:${w.id}`;
+      item.contextValue = 'worktree.removing';
+      item.description = 'removing…';
+      item.iconPath = new vscode.ThemeIcon('loading~spin');
+      item.tooltip = `Removing ${w.dir} and its local branch ${w.branch} (${worktreeTool('remove')})`;
+      return item;
+    }
     const item = new vscode.TreeItem(w.branch, vscode.TreeItemCollapsibleState.Expanded);
     item.id = `branch:${w.id}`;
-    item.contextValue = 'branch';
+    item.contextValue = worktreeContext(w);
     const bits = [];
     if (w.local?.dirty) bits.push(`✎${w.local.dirty}`);
     if (w.local?.ahead) bits.push(`↑${w.local.ahead}`);
@@ -879,6 +899,25 @@ class Tree {
     item.command = { command: 'hangar.openPR', title: 'Open PR on GitHub', arguments: [{ kind: 'pr', id: w.id }] };
     return item;
   }
+}
+
+// A worktree's branch row: which actions it gets
+const isRemovable = (w) => ['MERGED', 'CLOSED'].includes(w.pr?.state) && !w.local?.dirty && !w.local?.ahead;
+function worktreeContext(w) {
+  return `worktree${w.pr?.url ? '.pr' : ''}${isRemovable(w) ? '.removable' : ''}`;
+}
+
+// A ticket's or chat's worktrees as panel rows: one per repo, in the order they come. A repo with
+// several worktrees in it gets a single row with each worktree's branch under it.
+function repoRows(wts, ticket) {
+  const byRepo = new Map();
+  for (const w of wts) {
+    if (!byRepo.has(w.repo)) byRepo.set(w.repo, []);
+    byRepo.get(w.repo).push(w);
+  }
+  return [...byRepo].map(([repo, list]) => list.length === 1
+    ? { kind: 'wt', id: list[0].id, ticket }
+    : { kind: 'repo', repo, ids: list.map((w) => w.id), ticket });
 }
 
 const tree = new Tree();
@@ -1850,8 +1889,8 @@ async function ensureHooks(ctx, hookPath) {
 // Diff of everything selected in the list (⌘-click several tickets or branches), or just `el`
 async function diffSelection(el, selection) {
   const items = selection?.length ? selection : [el];
-  const ids = [...new Set(items.flatMap((it) => ['ticket', 'agent'].includes(it.kind)
-    ? worktreesOf(it.name).map((w) => w.id) : [it.id]))];
+  const ids = [...new Set(items.flatMap((it) => ['ticket', 'agent'].includes(it.kind) ? worktreesOf(it.name).map((w) => w.id)
+    : it.kind === 'repo' ? it.ids : [it.id]))];
   const names = [...new Set(ids.map((id) => worktrees.get(id)?.ticket).filter(Boolean))].map(displayName);
   if (!ids.length) return;
   await showDiff(ids, names.length > 2 ? `${names.length} tickets` : names.join(' + '));
@@ -1860,7 +1899,7 @@ async function diffSelection(el, selection) {
 // Right-click actions on a repo, branch or PR row
 const worktreeOf = (el) => worktrees.get(el?.id);
 function openTerminalIn(w) {
-  vscode.window.createTerminal({ name: `${w.repo} · ${displayName(w.ticket)}`, cwd: w.dir, env: claudeEnv(), iconPath: new vscode.ThemeIcon('terminal') }).show();
+  vscode.window.createTerminal({ name: `${repoLabel(w)} · ${displayName(w.ticket)}`, cwd: w.dir, env: claudeEnv(), iconPath: new vscode.ThemeIcon('terminal') }).show();
 }
 async function copy(text, what) {
   await vscode.env.clipboard.writeText(text);
@@ -1882,7 +1921,7 @@ async function removeWorktree(w) {
   tree.refresh();
   try {
     const useGtr = await hasGtr();
-    await inPanel('hangar.panel', `Removing the ${w.repo} worktree of ${displayName(w.ticket)}…`, async () => {
+    await inPanel('hangar.panel', `Removing the ${repoLabel(w)} worktree of ${displayName(w.ticket)}…`, async () => {
       if (useGtr) return run('git', ['-C', w.repoDir, 'gtr', 'rm', w.branch, '--delete-branch', '--yes']);
       await git(w.repoDir, ['worktree', 'remove', w.dir]);
       // Nothing unpushed (Remove only shows then), so the local branch can go
@@ -1950,7 +1989,7 @@ function activate(ctx) {
       const w = worktrees.get(el.id);
       if (!w) return;
       if (w.ticket !== activeTicket) await openTicket(w.ticket, { showClaude: false });
-      await showDiff([w.id], `${displayName(w.ticket)} · ${w.repo}`);
+      await showDiff([w.id], `${displayName(w.ticket)} · ${repoLabel(w)}`);
     }),
     // The window's folders can also change from outside (someone edits the workspace file)
     vscode.workspace.onDidChangeWorkspaceFolders(() => {

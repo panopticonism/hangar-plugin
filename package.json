@@ -361,32 +361,32 @@
 				},
 				{
 					"command": "hangar.diffWorktree",
-					"when": "view == hangar.panel && viewItem =~ /^(worktree(\\.pr)?(\\.removable)?|branch)$/",
+					"when": "view == hangar.panel && viewItem =~ /^worktree(\\.pr)?(\\.removable)?$/",
 					"group": "1_open@1"
 				},
 				{
 					"command": "hangar.terminalInWorktree",
-					"when": "view == hangar.panel && viewItem =~ /^(worktree(\\.pr)?(\\.removable)?|branch)$/",
+					"when": "view == hangar.panel && viewItem =~ /^worktree(\\.pr)?(\\.removable)?$/",
 					"group": "1_open@2"
 				},
 				{
 					"command": "hangar.revealWorktree",
-					"when": "view == hangar.panel && viewItem =~ /^(worktree(\\.pr)?(\\.removable)?|branch)$/",
+					"when": "view == hangar.panel && viewItem =~ /^worktree(\\.pr)?(\\.removable)?$/",
 					"group": "1_open@3"
 				},
 				{
 					"command": "hangar.copyBranch",
-					"when": "view == hangar.panel && viewItem =~ /^(worktree(\\.pr)?(\\.removable)?|branch)$/",
+					"when": "view == hangar.panel && viewItem =~ /^worktree(\\.pr)?(\\.removable)?$/",
 					"group": "3_copy@1"
 				},
 				{
 					"command": "hangar.copyPath",
-					"when": "view == hangar.panel && viewItem =~ /^(worktree(\\.pr)?(\\.removable)?|branch)$/",
+					"when": "view == hangar.panel && viewItem =~ /^worktree(\\.pr)?(\\.removable)?$/",
 					"group": "3_copy@2"
 				},
 				{
 					"command": "hangar.moveWorktree",
-					"when": "view == hangar.panel && viewItem =~ /^(worktree(\\.pr)?(\\.removable)?|branch)$/",
+					"when": "view == hangar.panel && viewItem =~ /^worktree(\\.pr)?(\\.removable)?$/",
 					"group": "5_move@1"
 				},
 				{

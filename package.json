@@ -2,7 +2,7 @@
 	"name": "hangar",
 	"displayName": "Hangar",
 	"description": "Claude Code chats and tickets in your sidebar, each with its own Claude, every git worktree grouped by ticket with its branch, PR and CI, one window that switches between them, and live multi-file diffs. macOS.",
-	"version": "3.0.1",
+	"version": "3.1.0",
 	"publisher": "panopticonism",
 	"license": "MIT",
 	"repository": {

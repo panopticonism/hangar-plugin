@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.1.0
 
 - The menu bar names each repo of a ticket or chat once (not once per worktree), and tells several PRs from one repo apart by their branch.
 - After a reload the panel stays empty (with its progress bar) until the first scan is done, then shows everything at once, instead of first showing a ticket or two with nothing in them. It waits up to 4 more seconds for PRs.

@@ -117,7 +117,7 @@ const link = (name) => `${scheme}://${extension}/open?ticket=${encodeURIComponen
 const items = [
   // A chat's worktrees (its Claude made some) show like a ticket's: their CI and PRs
   ...chats.map((c) => ({ name: c.name, label: clean(c.title), note: c.folder, chat: true, thread: c, color: c.color })),
-  ...tickets.map((t) => ({ name: t.name, label: clean(t.name), note: t.draft ? 'no repos yet' : t.repos.join(', '), thread: t, color: t.color })),
+  ...tickets.map((t) => ({ name: t.name, label: clean(t.name), note: t.draft ? 'no repos yet' : [...new Set(t.repos)].join(', '), thread: t, color: t.color })),
 ].map((it) => ({ ...it, state: stateOf(it.name), at: agents[it.name]?.at || 0 }));
 items.sort((a, b) => b.at - a.at);
 
@@ -143,9 +143,12 @@ const row = (it) => {
     ? `image=${mark(pick(it.color), it.chat ? 'chat' : 'tag')}`
     : `sfimage=${it.chat ? 'bubble.left' : 'tag'}`;
   out.push(`${it.label}${it.note ? `${DIM}  ${clean(it.note)}${RESET}` : ''}${ci}${when} | href=${link(it.name)} ${icon} ansi=true${failed ? ` color=${pick('#cf222e,#ff7b72')}` : ''}`);
-  for (const pr of it.thread?.prs || []) {
+  const prs = it.thread?.prs || [];
+  for (const pr of prs) {
     const checks = { pass: 'CI passed', fail: 'CI failed', pending: 'CI running', none: '' }[pr.checks] || '';
-    out.push(`--${clean(pr.repo)}: PR #${pr.number} ${String(pr.state).toLowerCase()}${checks && ['OPEN', 'DRAFT'].includes(pr.state) ? ` · ${checks}` : ''} | href=${pr.url}`);
+    // Several PRs from one repo are told apart by their branch
+    const shared = pr.branch && prs.filter((p) => p.repo === pr.repo).length > 1;
+    out.push(`--${clean(shared ? `${pr.repo} · ${pr.branch}` : pr.repo)}: PR #${pr.number} ${String(pr.state).toLowerCase()}${checks && ['OPEN', 'DRAFT'].includes(pr.state) ? ` · ${checks}` : ''} | href=${pr.url}`);
   }
 };
 const group = (heading, state, color) => {

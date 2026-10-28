@@ -598,14 +598,18 @@ function readAgents() {
 
 // The checks an idle Claude still has running in the background, which wake it up again when they end:
 // Claude Code's Monitors, and commands it ran in the background (tests, a build, a loop waiting on a
-// PR's CI), but not servers: { ticket or chat: [{ description, since }] }. One counts while its conversation has its
-// start and no end, and a background shell of that Claude started within a few seconds of it is still
-// alive: Claude Code doesn't always log a background task's end, and never one a restart killed.
+// PR's CI), but not ones that never end by themselves, like a server or a file watcher:
+// { ticket or chat: [{ description, since }] }. One counts while its conversation has its start and no end,
+// and a background shell of that Claude started within a few seconds of it is still alive: Claude Code
+// doesn't always log a background task's end, and never one a restart killed.
 let watching = {};
 const monitorLogs = new Map(); // transcript -> what's been read of it: { size, rest, descriptions, starts, ended }
 const MONITOR_START_RE = /Monitor started \(task (\w+)|Command running in background with ID: (\w+)/;
-// A dev server Claude leaves running in the background isn't something it's waiting on
-const SERVER_RE = /(^|[\s:])serve(:|\b)|\b(yarn|npm|pnpm)\s+(run\s+)?(dev|start)\b|\bstorybook\b/;
+// A server or a watcher Claude leaves running in the background isn't something it's waiting on. Known
+// ones are left out by their command; any other is once one of its processes listens on a port.
+const SERVER_RE = /(^|[\s:])serve(:|\b)|\b(yarn|npm|pnpm|bun)\s+(run\s+)?(dev|start|preview)\b|\b(storybook|nodemon|vite(?!\s+build)|next\s+(dev|start)|http\.server|runserver|rails\s+(s|server)|compose\s+up|cargo\s+watch|watchexec)\b|\btail\s+-\w*[fF]|(^|\s)--watch(All)?(?!=false)\b/;
+const WAITS_RE = /\bgh\s+(pr\s+checks|run\s+watch)\b/; // --watch here waits for CI, then ends
+const neverEnds = (command) => SERVER_RE.test(command) && !WAITS_RE.test(command);
 
 // The Monitors a conversation started and hasn't ended, read from its transcript: just the part added
 // since last time, a chunk at a time (transcripts run to over 100 MB), keeping only what's about
@@ -638,7 +642,7 @@ async function monitorsIn(file) {
 }
 
 const openMonitors = (log) => log.starts.filter((s) => !log.ended.has(s.task))
-  .map((s) => ({ ...s, description: log.descriptions.get(s.toolUseId) || 'A background check' }));
+  .map((s) => ({ ...s, ...log.descriptions.get(s.toolUseId), description: log.descriptions.get(s.toolUseId)?.description || 'A background check' }));
 
 // What the lines read so far say of Monitors and background commands: their descriptions, starts and ends
 function readMonitorLines(log, lines) {
@@ -650,9 +654,9 @@ function readMonitorLines(log, lines) {
       try { r = JSON.parse(line); } catch { continue; }
       const content = r.message?.content;
       for (const b of Array.isArray(content) ? content : []) {
-        if (b.type === 'tool_use' && b.name === 'Monitor') log.descriptions.set(b.id, b.input?.description);
-        if (b.type === 'tool_use' && b.name === 'Bash' && b.input?.run_in_background && !SERVER_RE.test(b.input.command || '')) {
-          log.descriptions.set(b.id, b.input.description);
+        if (b.type === 'tool_use' && b.name === 'Monitor') log.descriptions.set(b.id, { description: b.input?.description });
+        if (b.type === 'tool_use' && b.name === 'Bash' && b.input?.run_in_background && !neverEnds(b.input.command || '')) {
+          log.descriptions.set(b.id, { description: b.input.description, command: true });
         }
         // The start as the conversation has it (other records repeat it, without a time), in the result
         // of a Monitor or background call: not in another command's output that happens to quote one
@@ -695,6 +699,15 @@ async function readWatching() {
     const procs = out.split('\n').map((l) => l.trim().match(/^(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/)).filter(Boolean)
       .map(([, pid, ppid, etime, command]) => ({ pid: Number(pid), ppid: Number(ppid), at: now - elapsedMs(etime), command }));
     const children = (pid) => procs.filter((p) => p.ppid === pid);
+    const family = (p) => [p, ...children(p.pid).flatMap(family)];
+    let listening = null; // the processes listening on a port, asked for once a background command needs it
+    const listens = async (shell) => {
+      if (!listening) {
+        try { listening = new Set((await run('lsof', ['-t', '-nP', '-iTCP', '-sTCP:LISTEN'])).split('\n').map(Number)); }
+        catch { listening = new Set(); } // lsof fails when nothing listens
+      }
+      return family(shell).some((p) => listening.has(p.pid));
+    };
     for (const [name, open] of idle) {
       const shell = await claudeTerminalFor(name)?.processId;
       if (!shell) continue;
@@ -702,7 +715,16 @@ async function readWatching() {
       // Claude Code's shell snapshot)
       const shells = children(shell).flatMap((p) => children(p.pid)).filter((p) => p.command.includes('shell-snapshots'));
       if (!shells.length) continue;
-      const monitors = open.filter((m) => shells.some((s) => Math.abs(s.at - m.at) < 5000));
+      // Each check has a shell of its own: the nearest in time not taken by an earlier one (two started in
+      // the same second go in the order Claude Code started them)
+      const monitors = [], taken = new Set();
+      for (const m of [...open].sort((x, y) => x.at - y.at)) {
+        const own = shells.filter((s) => !taken.has(s) && Math.abs(s.at - m.at) < 5000)
+          .sort((x, y) => Math.abs(x.at - m.at) - Math.abs(y.at - m.at) || x.pid - y.pid)[0];
+        if (!own) continue;
+        taken.add(own);
+        if (!(m.command && await listens(own))) monitors.push(m);
+      }
       if (monitors.length) next[name] = monitors.map((m) => ({ description: m.description, since: m.at }));
     }
   }
@@ -1673,7 +1695,7 @@ async function moveWorktree(w) {
     return;
   }
   const pick = await vscode.window.showQuickPick(others.map((t) => ({
-    label: t.name, description: t.draft ? 'no repos yet' : t.worktrees.map((x) => x.repo).join(', '),
+    label: t.name, description: t.draft ? 'no repos yet' : [...new Set(t.worktrees.map((x) => x.repo))].join(', '),
   })), { placeHolder: `Move ${w.branch} (in every repo that has it) to ticket…` });
   if (!pick) return;
   claimBranch(pick.label, w.branch);
@@ -1903,7 +1925,7 @@ const STATUS_FILE = path.join(CACHE_DIR, 'status.json');
 // What the menu bar shows of a ticket's or chat's worktrees: their CI, repos and PRs
 const threadStatus = (wts) => ({
   ci: worstChecks(wts), repos: wts.map((w) => w.repo),
-  prs: wts.filter((w) => w.pr).map((w) => ({ repo: w.repo, number: w.pr.number, state: w.pr.state, url: w.pr.url, checks: w.pr.checks, review: w.pr.review })),
+  prs: wts.filter((w) => w.pr).map((w) => ({ repo: w.repo, branch: w.branch, number: w.pr.number, state: w.pr.state, url: w.pr.url, checks: w.pr.checks, review: w.pr.review })),
 });
 function writeStatus() {
   if (!isHangarWindow() || !menuBarOn()) return;

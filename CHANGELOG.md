@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- A ticket or chat whose PR's CI is still running says *CI running*, in the panel and the menu bar, as it says *CI failing*.
+- An idle Claude that still has a check running in the background (a Claude Code Monitor) shows *watching · 1 check*, with each check and when it started in the tooltip, and goes back to *idle* when the check ends. Other background commands, like a dev server, don't count. Hangar reads Monitors from the conversation a chunk at a time, only what's new since the last look, and asks for the Claude's processes only when one is open.
 - A branch a chat's Claude makes stays with the chat: its worktree shows under the chat, not as a ticket of its own with a second Claude, and goes with it when the chat becomes a ticket (whatever the ticket is called). *Turn it into a ticket thread* suggests that branch.
 - A chat's Claude is told to ask for the chat to become a ticket before it makes a branch, and to report any worktree it makes anyway. It can show you a chat's worktree changes, like a ticket's Claude.
 - Removing a chat puts the worktrees it held back under tickets of their own.

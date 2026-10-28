@@ -501,6 +501,7 @@ function poll() {
     readDrafts({ since: started });
     readAgents();
     readChats();
+    await refreshWatching();
     assignColors();
     const due = [...worktrees.values()].filter((wt) => Date.now() - wt.prAt > (['MERGED', 'CLOSED'].includes(wt.pr?.state) ? DONE_PR_TTL_MS : PR_TTL_MS));
     for (let i = 0; i < due.length; i += 6) await Promise.all(due.slice(i, i + 6).map(prStatus));
@@ -571,9 +572,121 @@ function readAgents() {
   agents = next;
 }
 
+// The checks an idle Claude still has running in the background (Claude Code's Monitors), which wake
+// it up again: { ticket or chat: [{ description, since }] }. One counts while its conversation has its
+// start and no end, and a background shell of that Claude started within a few seconds of it is still
+// alive: Claude Code doesn't always log a background task's end, and never one a restart killed.
+let watching = {};
+const monitorLogs = new Map(); // transcript -> what's been read of it: { size, rest, descriptions, starts, ended }
+const MONITOR_START_RE = /Monitor started \(task (\w+)/;
+
+// The Monitors a conversation started and hasn't ended, read from its transcript: just the part added
+// since last time, a chunk at a time (transcripts run to over 100 MB), keeping only what's about
+// Monitors and background tasks
+const MONITOR_CHUNK = 1 << 20;
+async function monitorsIn(file) {
+  let st;
+  try { st = await fs.promises.stat(file); } catch { return []; }
+  let log = monitorLogs.get(file);
+  if (!log || st.size < log.size) log = { size: 0, rest: '', descriptions: new Map(), starts: [], ended: new Set() };
+  monitorLogs.set(file, log);
+  if (st.size <= log.size) return openMonitors(log);
+  let fh;
+  try { fh = await fs.promises.open(file, 'r'); } catch { return openMonitors(log); }
+  try {
+    const buf = Buffer.alloc(MONITOR_CHUNK);
+    while (log.size < st.size) {
+      const { bytesRead } = await fh.read(buf, 0, Math.min(MONITOR_CHUNK, st.size - log.size), log.size);
+      if (!bytesRead) break;
+      log.size += bytesRead;
+      // A line can run across chunks (and a character across bytes): the unfinished end waits for the next
+      const lines = (log.rest + buf.toString('utf8', 0, bytesRead)).split('\n');
+      log.rest = lines.pop();
+      // A line too long to be about a Monitor (a big tool result) isn't kept whole while it's read
+      if (log.rest.length > 4 * MONITOR_CHUNK && !log.rest.includes('Monitor')) log.rest = '';
+      readMonitorLines(log, lines);
+    }
+  } finally { await fh.close(); }
+  return openMonitors(log);
+}
+
+const openMonitors = (log) => log.starts.filter((s) => !log.ended.has(s.task))
+  .map((s) => ({ ...s, description: log.descriptions.get(s.toolUseId) || 'A background check' }));
+
+// What the lines read so far say of Monitors: their descriptions, starts and ends
+function readMonitorLines(log, lines) {
+  for (const line of lines) {
+    const monitor = /"name":\s*"Monitor"/.test(line);
+    const started = line.includes('Monitor started (task');
+    if (monitor || started) {
+      let r;
+      try { r = JSON.parse(line); } catch { continue; }
+      const content = r.message?.content;
+      for (const b of Array.isArray(content) ? content : []) {
+        if (b.type === 'tool_use' && b.name === 'Monitor') log.descriptions.set(b.id, b.input?.description);
+        // The start as the conversation has it (other records repeat it, without a time), in the result
+        // of a Monitor call: not in another command's output that happens to quote one
+        if (b.type === 'tool_result' && r.type === 'user' && r.timestamp && log.descriptions.has(b.tool_use_id)) {
+          const text = typeof b.content === 'string' ? b.content : (b.content || []).map((c) => c.text || '').join('');
+          const m = text.match(MONITOR_START_RE);
+          if (m) log.starts.push({ task: m[1], toolUseId: b.tool_use_id, at: Date.parse(r.timestamp) });
+        }
+      }
+    }
+    // A task's end: a notice with its status (completed, failed, killed), or a Monitor's expiry
+    if (line.includes('<task-notification>') && (line.includes('<status>') || line.includes('Monitor expired'))) {
+      for (const m of line.matchAll(/<task-id>(\w+)<\/task-id>/g)) log.ended.add(m[1]);
+    }
+  }
+}
+
+// How long ago a process started, from the elapsed time ps prints: [[dd-]hh:]mm:ss
+function elapsedMs(t) {
+  const [days, clock] = t.includes('-') ? t.split('-') : [0, t];
+  const [h, m, s] = clock.split(':').map(Number).reverse().concat([0, 0, 0]).slice(0, 3).reverse();
+  return (((Number(days) * 24 + h) * 60 + m) * 60 + s) * 1000;
+}
+
+// Which idle Claudes are watching something, looked up only for those (an idle Claude has no
+// foreground command, so its shells are all background ones). The transcripts come first (cheap once
+// read): the process list is only asked for when one of them has a Monitor still open.
+async function readWatching() {
+  const idle = [];
+  for (const [name, a] of Object.entries(agents)) {
+    if (a.state !== 'idle' || !a.session || !claudeTerminalFor(name)) continue;
+    const open = await monitorsIn(transcriptOf(a.session, cwdOf(name)));
+    if (open.length) idle.push([name, open]);
+  }
+  const next = {};
+  if (idle.length) {
+    let out = '';
+    try { out = await run('ps', ['-Ao', 'pid=,ppid=,etime=,command=']); } catch {}
+    const now = Date.now();
+    const procs = out.split('\n').map((l) => l.trim().match(/^(\d+)\s+(\d+)\s+(\S+)\s+(.*)$/)).filter(Boolean)
+      .map(([, pid, ppid, etime, command]) => ({ pid: Number(pid), ppid: Number(ppid), at: now - elapsedMs(etime), command }));
+    const children = (pid) => procs.filter((p) => p.ppid === pid);
+    for (const [name, open] of idle) {
+      const shell = await claudeTerminalFor(name)?.processId;
+      if (!shell) continue;
+      // The terminal's shell runs Claude, which runs each command in a shell of its own (one sourcing
+      // Claude Code's shell snapshot)
+      const shells = children(shell).flatMap((p) => children(p.pid)).filter((p) => p.command.includes('shell-snapshots'));
+      if (!shells.length) continue;
+      const monitors = open.filter((m) => shells.some((s) => Math.abs(s.at - m.at) < 5000));
+      if (monitors.length) next[name] = monitors.map((m) => ({ description: m.description, since: m.at }));
+    }
+  }
+  watching = next;
+}
+// One lookup at a time; the panel shows what it finds
+let watchingRun = null;
+const refreshWatching = () => (watchingRun ??= readWatching().catch(() => {}).finally(() => { watchingRun = null; tree.refresh(); }));
+
 const live = (a) => a && a.state !== 'ended';
 const AGENT_LABEL = { working: 'working…', 'needs-input': 'waiting on you', idle: 'idle', ended: 'stopped', starting: 'starting…' };
 const AGENT_COLOR = { working: 'charts.blue', 'needs-input': 'charts.yellow', idle: undefined };
+// What a ticket's or chat's row says of its open PRs' CI (the worst of them)
+const CI_NOTE = { fail: 'CI failing', pending: 'CI running' };
 
 function since(seconds) {
   const s = Math.max(0, Math.round(Date.now() / 1000 - seconds));
@@ -653,6 +766,7 @@ class Tree {
     const shown = JSON.stringify({
       activeTicket, removing: [...removing], drafts, colorOf,
       agents: Object.entries(agents).map(([name, a]) => [name, a.state, a.session, since(a.at)]),
+      watching,
       chats: Object.values(chats).map((c) => [c.id, c.title, worktreesOf(`chat:${c.id}`).map((w) => [w.id, w.branch, w.local, w.pr])]),
       tickets: tickets().map((t) => [t.name, !!t.draft, t.worktrees.map((w) => [w.id, w.branch, w.local, w.pr])]),
       terminals: vscode.window.terminals.map((t) => t.name),
@@ -721,8 +835,7 @@ class Tree {
     );
     item.id = `ticket:${t.name}`;
     item.contextValue = t.draft ? 'ticket.draft' : 'ticket';
-    const ci = worstChecks(t.worktrees);
-    item.description = [active ? '● here' : '', ci === 'fail' ? 'CI failing' : ''].filter(Boolean).join(' · ');
+    item.description = [active ? '● here' : '', CI_NOTE[worstChecks(t.worktrees)]].filter(Boolean).join(' · ');
     item.resourceUri = ticketUri(t.name);
     item.iconPath = new vscode.ThemeIcon('tag', ticketColor(t.name));
     item.tooltip = `${t.name}: click to switch this window to it`;
@@ -775,8 +888,7 @@ class Tree {
     const item = new vscode.TreeItem(active ? { label, highlights: [[0, label.length]] } : label, vscode.TreeItemCollapsibleState.Expanded);
     item.id = `chat:${c.id}`;
     item.contextValue = running ? 'chat.live' : 'chat.stopped';
-    const ci = worstChecks(worktreesOf(name));
-    item.description = [active ? '● here' : '', ci === 'fail' ? 'CI failing' : ''].filter(Boolean).join(' · ');
+    item.description = [active ? '● here' : '', CI_NOTE[worstChecks(worktreesOf(name))]].filter(Boolean).join(' · ');
     item.resourceUri = ticketUri(name);
     item.iconPath = new vscode.ThemeIcon('comment-discussion', ticketColor(name));
     item.tooltip = `${running ? 'Show this chat' : 'Open this chat again (resumes the conversation)'}\n${chatCwd(c).replace(HOME, '~')}`;
@@ -799,7 +911,10 @@ class Tree {
     const term = claudeTerminalFor(name);
     // A chat moved in with a saved conversation but no status yet can be resumed too
     const saved = !a && isChat(name) && chats[chatId(name)]?.session;
-    const label = a ? `agent · ${AGENT_LABEL[a.state] || a.state}` : term ? 'agent · running' : saved ? 'agent · stopped' : 'agent · not started';
+    // An idle Claude can still have checks running in the background (Monitors) that wake it up again
+    const checks = a?.state === 'idle' && term ? watching[name] || [] : [];
+    const label = checks.length ? `agent · watching · ${checks.length} check${checks.length > 1 ? 's' : ''}`
+      : a ? `agent · ${AGENT_LABEL[a.state] || a.state}` : term ? 'agent · running' : saved ? 'agent · stopped' : 'agent · not started';
     const resumable = ((a?.state === 'ended' && a.session) || saved) && !term;
     // Plain text, not a link: the status is the label, dimmed by a decoration. Clicking the ticket
     // or chat above shows this agent (Claude), starting or resuming it.
@@ -813,7 +928,10 @@ class Tree {
     const running = live(a) || !!term;
     item.iconPath = new vscode.ThemeIcon('hubot', AGENT_COLOR[a?.state] ? new vscode.ThemeColor(AGENT_COLOR[a.state])
       : running ? undefined : new vscode.ThemeColor('disabledForeground'));
-    item.tooltip = `Claude is ${label.replace('agent · ', '')}${resumable ? '. Click the ' + (isChat(name) ? 'chat' : 'ticket') + ' to resume it' : ''}`;
+    const at = (ms) => new Date(ms).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    item.tooltip = checks.length
+      ? `Claude is idle until a check it runs in the background reports:\n${checks.map((c) => `${c.description} (since ${at(c.since)})`).join('\n')}`
+      : `Claude is ${label.replace('agent · ', '')}${resumable ? '. Click the ' + (isChat(name) ? 'chat' : 'ticket') + ' to resume it' : ''}`;
     return item;
   }
 
@@ -2053,7 +2171,14 @@ function activate(ctx) {
   fs.mkdirSync(REQUESTS_DIR, { recursive: true });
   fs.mkdirSync(DRAFTS_DIR, { recursive: true });
   fs.mkdirSync(CHATS_DIR, { recursive: true });
-  const agentWatch = fs.watch(AGENTS_DIR, () => { readAgents(); tree.refresh(); });
+  // A Claude going idle may have left a check running: looked up then, not on every hook report
+  const idleOnes = () => Object.keys(agents).filter((n) => agents[n].state === 'idle').sort().join('\n');
+  const agentWatch = fs.watch(AGENTS_DIR, () => {
+    const before = idleOnes();
+    readAgents();
+    tree.refresh();
+    if (idleOnes() !== before) refreshWatching();
+  });
   const requestWatch = fs.watch(REQUESTS_DIR, () => handleRequests());
   // Only a scan drops claims (it has just looked for their worktrees): a claim written the moment a
   // Claude reports a worktree it made comes before any scan has seen that worktree

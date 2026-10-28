@@ -9,6 +9,7 @@
 - A worktree Claude reports right after making it stays with its chat or ticket: the claim is no longer dropped before a scan has seen the worktree, including by a scan that was already running when Claude made it.
 - A chat's worktrees count like a ticket's: *CI failing* on the chat, in Hangar's badge, and in the menu bar, which lists their PRs.
 - A chat's Claude reporting a branch that a ticket already works on (one started or claimed in Hangar, or that has had a Claude) leaves it with that ticket.
+- A worktree a chat's or ticket's Claude makes (`git worktree add`, `git gtr new`) goes under that chat or ticket even if Claude doesn't report it: the agent status hook reports it (including `git worktree add <path>` with no branch, which git names after the folder), and Hangar takes it once git shows the worktree, without listing it as a ticket of its own first.
 
 ## 3.0.1
 

@@ -1605,6 +1605,14 @@ function ticketWorksOn(name, branch) {
   return !!(drafts[owner] || agents[owner]) && !!ticketByName(owner);
 }
 
+// Whether any repo of `name`'s project, or any worktree already known, has `branch` checked out
+async function worktreeOnBranch(name, branch) {
+  if ([...worktrees.values()].some((w) => w.branch === branch)) return true;
+  const root = rootOf(name);
+  const found = await Promise.all(repoNames(root).map((r) => checkedOutAt(repoDir(r, root), branch)));
+  return found.some(Boolean);
+}
+
 async function handleRequestsOnce() {
   for (const f of jsonFiles(REQUESTS_DIR, { sorted: true })) {
     const file = path.join(REQUESTS_DIR, f);
@@ -1622,7 +1630,11 @@ async function handleRequestsOnce() {
     // A ticket's (or chat's) Claude added a repo: its branch is the ticket's, whatever it's called;
     // show it if the window is on that ticket, never switch
     if (req.action === 'added') {
-      if (req.trusted && req.branch && checkBranch(req.branch) === undefined && !ticketWorksOn(req.ticket, req.branch)) claimBranch(req.ticket, req.branch);
+      // The hooks report a branch read off a command Claude ran (it may have failed, or be a misread):
+      // it counts once git shows a worktree on it. Asked of git directly rather than through a scan,
+      // which would first list the worktree as a ticket of its own.
+      const made = !req.fromHook || await worktreeOnBranch(req.ticket, req.branch);
+      if (req.trusted && made && req.branch && checkBranch(req.branch) === undefined && !ticketWorksOn(req.ticket, req.branch)) claimBranch(req.ticket, req.branch);
       await poll();
       if (req.ticket === activeTicket) await openTicket(req.ticket, { showClaude: false });
     }

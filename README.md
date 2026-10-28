@@ -26,7 +26,7 @@ Works in VSCodium, Cursor and VS Code, **on macOS**. Other systems aren't suppor
 
 ## Agent status
 
-On first start Hangar asks to add Claude Code hooks to `~/.claude/settings.json` (*Turn on agent status* asks again later). They run `agent-hook.js`, which only acts for Claudes Hangar started (those have `HANGAR_TICKET` set) and records working, waiting on you (a permission or a question; not Claude's idle reminder), idle or stopped, with the session ID so a stopped one resumes. Once they're on, Hangar keeps them pointing at the current Node and hook script without asking again; your other hooks are left as they are.
+On first start Hangar asks to add Claude Code hooks to `~/.claude/settings.json` (*Turn on agent status* asks again later). They run `agent-hook.js`, which only acts for Claudes Hangar started (those have `HANGAR_TICKET` set) and records working, waiting on you (a permission or a question; not Claude's idle reminder), idle or stopped, with the session ID so a stopped one resumes. When one of those Claudes makes a worktree (`git worktree add`, `git gtr new`), the hook also reports its branch, so it's filed under that chat or ticket even if Claude forgets to say so. Once they're on, Hangar keeps them pointing at the current Node and hook script without asking again; your other hooks are left as they are.
 
 ## Menu bar
 

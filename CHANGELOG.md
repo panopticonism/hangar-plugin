@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.1.1
+
+- Released on GitHub, built for Macs only (Apple silicon and Intel).
+- Doesn't start in Restricted Mode or in a virtual workspace, since it runs git, `gh` and Claude Code in your repos.
+
 ## 3.1.0
 
 - The menu bar names each repo of a ticket or chat once (not once per worktree), and tells several PRs from one repo apart by their branch.

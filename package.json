@@ -2,7 +2,7 @@
 	"name": "hangar",
 	"displayName": "Hangar",
 	"description": "Claude Code chats and tickets in your sidebar, each with its own Claude, every git worktree grouped by ticket with its branch, PR and CI, one window that switches between them, and live multi-file diffs. macOS.",
-	"version": "3.1.0",
+	"version": "3.1.1",
 	"publisher": "panopticonism",
 	"license": "MIT",
 	"repository": {
@@ -47,6 +47,16 @@
 		"onStartupFinished",
 		"onUri"
 	],
+	"capabilities": {
+		"untrustedWorkspaces": {
+			"supported": false,
+			"description": "Hangar runs git, gh and Claude Code in the window's repos."
+		},
+		"virtualWorkspaces": {
+			"supported": false,
+			"description": "Hangar needs repos on this Mac's disk."
+		}
+	},
 	"contributes": {
 		"configuration": {
 			"title": "Hangar",

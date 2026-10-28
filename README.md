@@ -7,6 +7,10 @@ Claude Code chats and tickets in the editor's sidebar, each with its own Claude,
 
 Works in VSCodium, Cursor and VS Code, **on macOS**. Other systems aren't supported yet.
 
+## Install
+
+Download the `.vsix` for your Mac (`darwin-arm64` for Apple silicon, `darwin-x64` for Intel) from [Releases](https://github.com/panopticonism/hangar-plugin/releases) and use *Extensions: Install from VSIX…* in VSCodium, Cursor or VS Code. Hangar doesn't start in Restricted Mode: trust the window's folder first.
+
 ## Requirements
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude` on your PATH): each chat and ticket runs one in an editor terminal.

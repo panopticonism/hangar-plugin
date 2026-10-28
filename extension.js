@@ -220,14 +220,16 @@ function claimBranch(ticket, branch) {
   ticketsMemo = null;
 }
 
+// One git call: the changed files, and how far the branch is ahead of and behind its upstream (a
+// `# branch.ab +1 -2` header, only there when it has one)
 async function localStatus(wt) {
-  const status = await git(wt.dir, ['status', '--porcelain=v1']).catch(() => '');
-  let ahead = null;
-  let behind = null;
-  try {
-    [behind, ahead] = (await git(wt.dir, ['rev-list', '--left-right', '--count', '@{u}...HEAD'])).trim().split(/\s+/).map(Number);
-  } catch {}
-  wt.local = { dirty: status.split('\n').filter(Boolean).length, ahead, behind };
+  const lines = (await git(wt.dir, ['status', '--porcelain=v2', '--branch']).catch(() => '')).split('\n').filter(Boolean);
+  const ab = lines.find((l) => l.startsWith('# branch.ab '))?.match(/\+(\d+) -(\d+)/);
+  wt.local = {
+    dirty: lines.filter((l) => !l.startsWith('#')).length,
+    ahead: ab ? Number(ab[1]) : null,
+    behind: ab ? Number(ab[2]) : null,
+  };
 }
 
 // A check that was run again (a re-run, or a newer run that cancelled it, e.g. the same workflow for both

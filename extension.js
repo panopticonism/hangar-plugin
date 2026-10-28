@@ -134,6 +134,22 @@ const reposIn = (root) => reposByRoot.get(root) || new Map();
 const repoDir = (name, root) => reposIn(root).get(name);
 const repoNames = (root) => [...reposIn(root).keys()].sort();
 
+// A worktree is detached while a rebase is under way (and stops there on a conflict), but it's still
+// that branch's worktree: without this its ticket would let go of the branch mid-rebase (readDrafts)
+function rebasingBranch(dir) {
+  try {
+    let gitDir = path.join(dir, '.git');
+    if (fs.statSync(gitDir).isFile()) gitDir = path.resolve(dir, fs.readFileSync(gitDir, 'utf8').replace(/^gitdir:/, '').trim());
+    for (const sub of ['rebase-merge', 'rebase-apply']) {
+      try {
+        const ref = fs.readFileSync(path.join(gitDir, sub, 'head-name'), 'utf8').trim();
+        if (ref.startsWith('refs/heads/')) return ref.slice(11);
+      } catch {}
+    }
+  } catch {}
+  return null;
+}
+
 // Every repo's worktrees, from git itself, so they're found wherever they live (gtr's folder,
 // .claude/worktrees, next to the repo…). The repo's own checkout isn't a ticket.
 async function discover() {
@@ -148,6 +164,7 @@ async function discover() {
     for (const line of [...out.split('\n'), '']) {
       if (line.startsWith('worktree ')) cur = { dir: line.slice(9), branch: '(detached)' };
       else if (line.startsWith('branch refs/heads/') && cur) cur.branch = line.slice(18);
+      else if (line === 'detached' && cur) cur.branch = rebasingBranch(cur.dir) || cur.branch;
       else if (line === '' && cur) { entries.push(cur); cur = null; }
     }
     for (const e of entries.slice(1)) {
@@ -483,13 +500,18 @@ const threadOf = (name) => isChat(name)
 let pollRun = null;
 let pollAgain = null;
 let pollAt = 0;
+// The panel shows nothing (with its progress bar) until the first scan has found everything, rather
+// than a ticket or two from what's saved filling in bit by bit. PRs count too, unless GitHub is slow.
+let markScanned;
+const scanned = new Promise((resolve) => { markScanned = resolve; });
+const FIRST_PR_WAIT_MS = 4000;
 function poll() {
   if (pollRun) {
     pollAgain ??= pollRun.then(() => { pollAgain = null; return poll(); });
     return pollAgain;
   }
   invalidate();
-  if (!projects().length) return Promise.resolve();
+  if (!projects().length) { markScanned(); return Promise.resolve(); }
   pollAt = Date.now();
   pollRun = (async () => {
     // Worktrees are filed under the drafts that claimed their branch, so on the first scan those are
@@ -503,14 +525,16 @@ function poll() {
     readChats();
     await refreshWatching();
     assignColors();
+    setTimeout(markScanned, FIRST_PR_WAIT_MS);
     const due = [...worktrees.values()].filter((wt) => Date.now() - wt.prAt > (['MERGED', 'CLOSED'].includes(wt.pr?.state) ? DONE_PR_TTL_MS : PR_TTL_MS));
     for (let i = 0; i < due.length; i += 6) await Promise.all(due.slice(i, i + 6).map(prStatus));
     tree.refresh();
     updateStatusBar();
     syncFolders();
     writeStatus();
+    markScanned();
     await refreshOpenDiffs();
-  })().finally(() => { pollRun = null; });
+  })().finally(() => { pollRun = null; markScanned(); });
   return pollRun;
 }
 
@@ -572,13 +596,16 @@ function readAgents() {
   agents = next;
 }
 
-// The checks an idle Claude still has running in the background (Claude Code's Monitors), which wake
-// it up again: { ticket or chat: [{ description, since }] }. One counts while its conversation has its
+// The checks an idle Claude still has running in the background, which wake it up again when they end:
+// Claude Code's Monitors, and commands it ran in the background (tests, a build, a loop waiting on a
+// PR's CI), but not servers: { ticket or chat: [{ description, since }] }. One counts while its conversation has its
 // start and no end, and a background shell of that Claude started within a few seconds of it is still
 // alive: Claude Code doesn't always log a background task's end, and never one a restart killed.
 let watching = {};
 const monitorLogs = new Map(); // transcript -> what's been read of it: { size, rest, descriptions, starts, ended }
-const MONITOR_START_RE = /Monitor started \(task (\w+)/;
+const MONITOR_START_RE = /Monitor started \(task (\w+)|Command running in background with ID: (\w+)/;
+// A dev server Claude leaves running in the background isn't something it's waiting on
+const SERVER_RE = /(^|[\s:])serve(:|\b)|\b(yarn|npm|pnpm)\s+(run\s+)?(dev|start)\b|\bstorybook\b/;
 
 // The Monitors a conversation started and hasn't ended, read from its transcript: just the part added
 // since last time, a chunk at a time (transcripts run to over 100 MB), keeping only what's about
@@ -603,7 +630,7 @@ async function monitorsIn(file) {
       const lines = (log.rest + buf.toString('utf8', 0, bytesRead)).split('\n');
       log.rest = lines.pop();
       // A line too long to be about a Monitor (a big tool result) isn't kept whole while it's read
-      if (log.rest.length > 4 * MONITOR_CHUNK && !log.rest.includes('Monitor')) log.rest = '';
+      if (log.rest.length > 4 * MONITOR_CHUNK && !/Monitor|in background/.test(log.rest)) log.rest = '';
       readMonitorLines(log, lines);
     }
   } finally { await fh.close(); }
@@ -613,23 +640,26 @@ async function monitorsIn(file) {
 const openMonitors = (log) => log.starts.filter((s) => !log.ended.has(s.task))
   .map((s) => ({ ...s, description: log.descriptions.get(s.toolUseId) || 'A background check' }));
 
-// What the lines read so far say of Monitors: their descriptions, starts and ends
+// What the lines read so far say of Monitors and background commands: their descriptions, starts and ends
 function readMonitorLines(log, lines) {
   for (const line of lines) {
-    const monitor = /"name":\s*"Monitor"/.test(line);
-    const started = line.includes('Monitor started (task');
+    const monitor = /"name":\s*"Monitor"/.test(line) || /"run_in_background":\s*true/.test(line);
+    const started = line.includes('Monitor started (task') || line.includes('Command running in background with ID');
     if (monitor || started) {
       let r;
       try { r = JSON.parse(line); } catch { continue; }
       const content = r.message?.content;
       for (const b of Array.isArray(content) ? content : []) {
         if (b.type === 'tool_use' && b.name === 'Monitor') log.descriptions.set(b.id, b.input?.description);
+        if (b.type === 'tool_use' && b.name === 'Bash' && b.input?.run_in_background && !SERVER_RE.test(b.input.command || '')) {
+          log.descriptions.set(b.id, b.input.description);
+        }
         // The start as the conversation has it (other records repeat it, without a time), in the result
-        // of a Monitor call: not in another command's output that happens to quote one
+        // of a Monitor or background call: not in another command's output that happens to quote one
         if (b.type === 'tool_result' && r.type === 'user' && r.timestamp && log.descriptions.has(b.tool_use_id)) {
           const text = typeof b.content === 'string' ? b.content : (b.content || []).map((c) => c.text || '').join('');
           const m = text.match(MONITOR_START_RE);
-          if (m) log.starts.push({ task: m[1], toolUseId: b.tool_use_id, at: Date.parse(r.timestamp) });
+          if (m) log.starts.push({ task: m[1] || m[2], toolUseId: b.tool_use_id, at: Date.parse(r.timestamp) });
         }
       }
     }
@@ -649,7 +679,7 @@ function elapsedMs(t) {
 
 // Which idle Claudes are watching something, looked up only for those (an idle Claude has no
 // foreground command, so its shells are all background ones). The transcripts come first (cheap once
-// read): the process list is only asked for when one of them has a Monitor still open.
+// read): the process list is only asked for when one of them has a check still open.
 async function readWatching() {
   const idle = [];
   for (const [name, a] of Object.entries(agents)) {
@@ -780,6 +810,7 @@ class Tree {
     // One panel with two groups (two separate panels can't shrink to fit, which leaves a gap);
     // with several projects, each project holds its own two groups
     const groups = (root) => [{ kind: 'chats', root }, { kind: 'tickets', root }];
+    if (!el && !this.ready) return scanned.then(() => { this.ready = true; return this.getChildren(); });
     if (!el) {
       const roots = projects();
       return roots.length > 1 ? roots.map((root) => ({ kind: 'project', root })) : groups(roots[0] || ROOT);
@@ -911,7 +942,8 @@ class Tree {
     const term = claudeTerminalFor(name);
     // A chat moved in with a saved conversation but no status yet can be resumed too
     const saved = !a && isChat(name) && chats[chatId(name)]?.session;
-    // An idle Claude can still have checks running in the background (Monitors) that wake it up again
+    // An idle Claude can still have checks running in the background (Monitors, tests, a wait on CI)
+    // that wake it up again
     const checks = a?.state === 'idle' && term ? watching[name] || [] : [];
     const label = checks.length ? `agent · watching · ${checks.length} check${checks.length > 1 ? 's' : ''}`
       : a ? `agent · ${AGENT_LABEL[a.state] || a.state}` : term ? 'agent · running' : saved ? 'agent · stopped' : 'agent · not started';

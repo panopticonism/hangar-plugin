@@ -2,8 +2,10 @@
 
 ## Unreleased
 
+- After a reload the panel stays empty (with its progress bar) until the first scan is done, then shows everything at once, instead of first showing a ticket or two with nothing in them. It waits up to 4 more seconds for PRs.
+- A worktree mid-rebase (detached until the rebase finishes, including while it's stopped on a conflict) still counts as its branch's: it no longer shows *(detached)*, and a ticket or chat that took the branch keeps it instead of letting it go to a ticket of its own.
 - A ticket or chat whose PR's CI is still running says *CI running*, in the panel and the menu bar, as it says *CI failing*.
-- An idle Claude that still has a check running in the background (a Claude Code Monitor) shows *watching · 1 check*, with each check and when it started in the tooltip, and goes back to *idle* when the check ends. Other background commands, like a dev server, don't count. Hangar reads Monitors from the conversation a chunk at a time, only what's new since the last look, and asks for the Claude's processes only when one is open.
+- An idle Claude that still has a check running in the background (a Claude Code Monitor, or a command it ran in the background: tests, a build, a loop waiting on a PR's CI) shows *watching · 1 check*, with each check and when it started in the tooltip, and goes back to *idle* when the check ends. A dev server left running doesn't count. Hangar reads them from the conversation a chunk at a time, only what's new since the last look, and asks for the Claude's processes only when one is open.
 - A branch a chat's Claude makes stays with the chat: its worktree shows under the chat, not as a ticket of its own with a second Claude, and goes with it when the chat becomes a ticket (whatever the ticket is called). *Turn it into a ticket thread* suggests that branch.
 - A chat's Claude is told to ask for the chat to become a ticket before it makes a branch, and to report any worktree it makes anyway. It can show you a chat's worktree changes, like a ticket's Claude.
 - Removing a chat puts the worktrees it held back under tickets of their own.

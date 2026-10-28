@@ -20,8 +20,10 @@ const { execFileSync } = require('child_process');
 
 const HOME = os.homedir();
 const CACHE = path.join(HOME, '.cache/hangar');
-// The status file is written every 10 seconds while the Hangar window is open
-const STALE_AFTER = 45;
+// The status file is written with each scan while the Hangar window is open: every 10 seconds, or
+// every 60 while it's in the background and no Claude is working. Closing the window marks it closed
+// at once; this is for a window that went without (a crash).
+const STALE_AFTER = 90;
 const now = Math.floor(Date.now() / 1000);
 
 // Colors come as "light,dark" pairs. SwiftBar ignores a pair for an icon's color (sfcolor), so the

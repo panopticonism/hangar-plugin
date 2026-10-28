@@ -13,6 +13,8 @@
 - Two or more worktrees of one repo in the same ticket or chat share one repo row, with a branch row (and its PR) for each, instead of a repo row per worktree. Their folders, diff titles and terminals name the branch.
 - A worktree's actions (diff, terminal, reveal, copy, move, remove) are on its branch row only; repo rows just group, whether they hold one worktree or several.
 - Each scan asks git once per worktree instead of twice (`git status --porcelain=v2 --branch` gives the changes and how far it's ahead of and behind its upstream), about half the time.
+- While the Hangar window is in the background and no Claude is working, it scans every 60 seconds instead of every 10, and straight away when it's focused again. What each Claude is doing, links and worktree reports still come in at once.
+- Closing the Hangar window shows in the menu bar at once, instead of once its status file has gone stale.
 
 ## 3.0.1
 

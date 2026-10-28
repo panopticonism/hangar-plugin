@@ -21,6 +21,8 @@ const SHARE_DIR = path.join(HOME, '.local/share/hangar');
 const WORKSPACE_FILE = path.join(SHARE_DIR, 'Hangar.code-workspace');
 const CACHE_DIR = path.join(HOME, '.cache/hangar');
 const POLL_MS = 10_000;
+// In the background (the window not focused) with no Claude working, little changes: scan this often
+const BACKGROUND_POLL_MS = 60_000;
 const PR_TTL_MS = 90_000;
 // A merged or closed PR rarely changes again, so it's looked at far less often (Refresh still does)
 const DONE_PR_TTL_MS = 30 * 60_000;
@@ -480,6 +482,7 @@ const threadOf = (name) => isChat(name)
 // once it finishes, so it sees the change instead of reusing results from before it.
 let pollRun = null;
 let pollAgain = null;
+let pollAt = 0;
 function poll() {
   if (pollRun) {
     pollAgain ??= pollRun.then(() => { pollAgain = null; return poll(); });
@@ -487,6 +490,7 @@ function poll() {
   }
   invalidate();
   if (!projects().length) return Promise.resolve();
+  pollAt = Date.now();
   pollRun = (async () => {
     // Worktrees are filed under the drafts that claimed their branch, so on the first scan those are
     // read before the worktrees are found (and kept: none of their worktrees has been seen yet)
@@ -2065,11 +2069,23 @@ function activate(ctx) {
     await ensureHooks(ctx, hookPath);
   }));
   // Each window runs its own scan (git status for every worktree, gh for every PR). The Hangar window
-  // keeps scanning: the menu bar and the pop-ups count on it. Any other window only scans while its
-  // Hangar panel is showing, and catches up as soon as the panel is shown again.
-  const timer = setInterval(() => { if (isHangarWindow() || treeView.visible) poll(); }, POLL_MS);
+  // keeps scanning: the menu bar counts on it for worktrees and CI. Any other window only scans while
+  // its Hangar panel is showing, and catches up as soon as the panel is shown again.
+  // What each Claude is doing, links and drafts come in through file watchers, not the scan. So in the
+  // background, with no Claude working (that's when worktrees appear and files change), it scans every
+  // 60 seconds instead of every 10, and straight away when the window is focused again.
+  const scanning = () => isHangarWindow() || treeView.visible;
+  const working = () => Object.values(agents).some((a) => a.state === 'working' || a.state === 'starting');
+  const timer = setInterval(() => {
+    if (!scanning()) return;
+    const background = !vscode.window.state.focused && !working();
+    // Ticks come every 10 seconds, so this lands on about every 60
+    if (background && Date.now() - pollAt < BACKGROUND_POLL_MS - POLL_MS / 2) return;
+    poll();
+  }, POLL_MS);
   ctx.subscriptions.push({ dispose: () => clearInterval(timer) },
-    treeView.onDidChangeVisibility((e) => { if (e.visible && !isHangarWindow()) poll(); }));
+    treeView.onDidChangeVisibility((e) => { if (e.visible && !isHangarWindow()) poll(); }),
+    vscode.window.onDidChangeWindowState((e) => { if (e.focused && scanning() && Date.now() - pollAt > 2000) poll(); }));
   ctx.subscriptions.push(vscode.workspace.onDidChangeConfiguration((e) => {
     if (e.affectsConfiguration('hangar.menuBar')) syncMenuBar({ asked: true }).catch(() => {});
     if (!e.affectsConfiguration('hangar.root') && !e.affectsConfiguration('hangar.roots')) return;
@@ -2103,6 +2119,11 @@ function activate(ctx) {
   });
 }
 
-function deactivate() {}
+// The window is closing (or reloading): the menu bar shows it as closed at once, rather than once the
+// status file has gone stale
+function deactivate() {
+  if (!isHangarWindow() || !menuBarOn()) return;
+  try { writeJson(STATUS_FILE, { ...JSON.parse(fs.readFileSync(STATUS_FILE, 'utf8')), at: 0 }); } catch {}
+}
 
 module.exports = { activate, deactivate };

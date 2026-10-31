@@ -1,0 +1,40 @@
+# Pushing a version tag (git tag v3.1.3 && git push origin v3.1.3) builds Hangar for both kinds of Mac
+# and publishes a GitHub release with them, its notes taken from that version's CHANGELOG section.
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # The tag has to name the version package.json says, and the CHANGELOG has to say what's in it
+      - name: Check the version
+        run: |
+          version=$(node -p "require('./package.json').version")
+          [ "$GITHUB_REF_NAME" = "v$version" ] || { echo "::error::Tag $GITHUB_REF_NAME, but package.json says $version"; exit 1; }
+          awk -v h="## $version" '$0 == h { on = 1; next } on && /^## / { exit } on' CHANGELOG.md | sed '/./,$!d' > notes.md
+          [ -s notes.md ] || { echo "::error::CHANGELOG.md has no ## $version section"; exit 1; }
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+
+      # vsce 4: 3.2.x wrongly refuses README.md and CHANGELOG.md in package.json's "files"
+      - name: Build
+        run: |
+          for target in darwin-arm64 darwin-x64; do
+            npx -y @vscode/vsce@4.0.0 package --no-dependencies --target "$target" -o "hangar-$VERSION-$target.vsix"
+          done
+
+      - name: Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" hangar-*.vsix --title "Hangar $VERSION" --notes-file notes.md --verify-tag

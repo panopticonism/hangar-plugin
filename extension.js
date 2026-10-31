@@ -1963,9 +1963,11 @@ async function swiftBarPlugins() {
 }
 
 // With the menu bar on, keeps the SwiftBar script up to date in SwiftBar's plugin folder (it runs with
-// this Node, and its icon lives with the hook script); with it off, takes the script out again.
-// `asked`: the setting was just turned on, so say what's missing instead of doing nothing.
+// this Node, and its icon lives with the hook script); turning it off takes the script out again.
+// `asked`: the setting was just changed, so say what's missing instead of doing nothing. Only then
+// does off take the script out: an editor or profile that never turned it on leaves another's alone.
 async function syncMenuBar({ asked = false } = {}) {
+  if (!menuBarOn() && !asked) return;
   const dir = await swiftBarPlugins();
   if (!menuBarOn()) {
     const target = dir && path.join(dir, MENU_BAR_SCRIPT);
@@ -1992,6 +1994,18 @@ async function syncMenuBar({ asked = false } = {}) {
   const target = path.join(dir, MENU_BAR_SCRIPT);
   if (!(fs.existsSync(target) && fs.readFileSync(target, 'utf8') === script)) fs.writeFileSync(target, script, { mode: 0o755 });
   writeStatus();
+}
+
+// Asks once, in the Hangar window, whether to turn the menu bar on, unless the setting has already been
+// set either way. Turning it on goes through the setting, so a missing SwiftBar is explained there.
+async function offerMenuBar(ctx) {
+  if (!isHangarWindow() || ctx.globalState.get('hangar.menuBarAsked')) return;
+  const set = vscode.workspace.getConfiguration('hangar').inspect('menuBar');
+  if ([set?.globalValue, set?.workspaceValue, set?.workspaceFolderValue].some((v) => v !== undefined)) return;
+  const pick = await vscode.window.showInformationMessage(
+    'Show Hangar in the Mac menu bar? What each agent is doing and failing CI, at a glance.', 'Turn on', 'Not now');
+  await ctx.globalState.update('hangar.menuBarAsked', true);
+  if (pick === 'Turn on') await vscode.workspace.getConfiguration('hangar').update('menuBar', true, vscode.ConfigurationTarget.Global);
 }
 
 // ---- Claude Code hooks: how Hangar knows what each agent is doing ----
@@ -2242,7 +2256,8 @@ function activate(ctx) {
   hasGtr();
   const hookPath = installHook();
   syncMenuBar().catch(() => {});
-  ensureHooks(ctx, hookPath);
+  // One question at a time: the menu bar's comes after the hooks'
+  ensureHooks(ctx, hookPath).catch(() => {}).then(() => offerMenuBar(ctx)).catch(() => {});
   ctx.subscriptions.push(vscode.commands.registerCommand('hangar.setupHooks', async () => {
     await ctx.globalState.update('hangar.hooksDeclined', undefined);
     await ensureHooks(ctx, hookPath);

@@ -36,7 +36,7 @@ On first start Hangar asks to add Claude Code hooks to `~/.claude/settings.json`
 
 ## Menu bar
 
-Off by default. With `hangar.menuBar` on and [SwiftBar](https://swiftbar.app) installed (open it once to choose its plugin folder), Hangar puts `hangar.5s.js` in SwiftBar's plugin folder and keeps it up to date; turning the setting off takes it out again. The script runs with the Node the editor found, since SwiftBar's PATH has neither nvm nor Homebrew.
+Off by default: the Hangar window asks once whether to turn it on (after the agent status question), and after that it's the `hangar.menuBar` setting. With it on and [SwiftBar](https://swiftbar.app) installed (open it once to choose its plugin folder), Hangar puts `hangar.5s.js` in SwiftBar's plugin folder and keeps it up to date; turning the setting off takes it out again. The script runs with the Node the editor found, since SwiftBar's PATH has neither nvm nor Homebrew.
 
 The menu bar shows Hangar's icon, how many Claudes are waiting on you or working, and failing CI. Each chat and ticket in the menu says when its CI is failing or still running. The menu lists every chat and ticket by what its Claude is doing, with each ticket's PRs; clicking one opens it in the Hangar window of the editor it runs in. It reads `~/.cache/hangar/status.json`, which the Hangar window writes with each scan (every 10 seconds, or every 60 while it's in the background and no Claude is working), and the hooks' files, which show what each Claude is doing straight away; when the window is closed, everything shows as not running.
 

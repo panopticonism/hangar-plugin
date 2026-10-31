@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.1.2
+
+- The Hangar window asks once whether to show Hangar in the Mac menu bar, so you find out it can without reading the README. It doesn't ask if you've already set `hangar.menuBar` either way, and comes after the agent status question.
+- An editor or profile with the menu bar off no longer takes out the menu bar script another one put in, each time it starts. Only turning the setting off does.
+
 ## 3.1.1
 
 - Released on GitHub, built for Macs only (Apple silicon and Intel).

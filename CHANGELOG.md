@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.1.3
+
+- Hangar's icon is the same drawing everywhere (the menu bar, the sidebar and the extension's icon), with heavier lines, a slightly taller roof and the plane's tail in the door filled in.
+- The menu bar icon is drawn on the menu bar's own pixel grid, so its lines are straight and crisp, and it's centred like the icons next to it.
+- The extension's icon is drawn at twice the size, so its lines stay smooth instead of jagged on Retina screens.
+
 ## 3.1.2
 
 - The Hangar window asks once whether to show Hangar in the Mac menu bar, so you find out it can without reading the README. It doesn't ask if you've already set `hangar.menuBar` either way, and comes after the agent status question.

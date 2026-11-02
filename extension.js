@@ -1101,6 +1101,9 @@ function repoRows(wts, ticket) {
 const tree = new Tree();
 let treeView;
 let statusBar;
+// While one of Hangar's diffs is in front: what it's against, and a click picks the other (Cursor shows
+// no extension buttons on its multi-file diff, so this is where Compare with… lives)
+let diffStatus;
 
 function updateStatusBar() {
   // The badge counts every ticket, and every chat with worktrees, whatever this window is on
@@ -1272,7 +1275,7 @@ function claude(name) {
 
 // ---- diffs ----
 
-const openDiffs = new Map(); // source uri -> { title, ids, signature, stale }
+const openDiffs = new Map(); // key -> { label, title, ids, mode, bases, commits, signature, stale, source }
 
 // Base side of a diff: `git show <merge base>:<path>` in the worktree
 class BaseContent {
@@ -1282,25 +1285,44 @@ class BaseContent {
   }
 }
 
-async function diffResources(wts) {
+// What a diff shows: everything since the base branch, only what isn't committed yet, or what the last
+// commit changed
+const DIFF_MODES = {
+  base: { what: 'everything on the branch, commits and uncommitted changes' },
+  uncommitted: { label: 'uncommitted', what: "only what isn't committed yet", none: 'nothing uncommitted' },
+  commit: { label: 'last commit', what: 'what the last commit changed', none: 'the last commit changed nothing' },
+};
+const EMPTY_TREE = '4b825dc642cb6eb9a060e54bf8d69288fbee4904';
+
+async function diffResources(wts, mode = 'base') {
   const resources = [];
   const bases = new Set();
+  const commits = [];
   for (const w of wts) {
-    const base = await baseRef(w);
-    bases.add(base?.name || 'HEAD');
-    let mergeBase = 'HEAD';
-    if (base) try { mergeBase = (await git(w.dir, ['merge-base', base.ref, 'HEAD'])).trim(); } catch {}
-    const baseUri = (p) => vscode.Uri.from({
-      scheme: 'hangar-base', path: path.join(w.dir, p), query: new URLSearchParams({ dir: w.dir, ref: mergeBase, p }).toString(),
+    // The base side, and the other side when it's a commit rather than the files on disk
+    let from = 'HEAD';
+    let to = null;
+    if (mode === 'base') {
+      const base = await baseRef(w);
+      bases.add(base?.name || 'HEAD');
+      if (base) try { from = (await git(w.dir, ['merge-base', base.ref, 'HEAD'])).trim(); } catch {}
+    } else if (mode === 'commit') {
+      to = (await git(w.dir, ['rev-parse', 'HEAD'])).trim();
+      try { from = (await git(w.dir, ['rev-parse', 'HEAD^'])).trim(); } catch { from = EMPTY_TREE; }
+      commits.push((await git(w.dir, ['log', '-1', '--format=%h %s'])).trim());
+    }
+    const refUri = (ref) => (p) => vscode.Uri.from({
+      scheme: 'hangar-base', path: path.join(w.dir, p), query: new URLSearchParams({ dir: w.dir, ref, p }).toString(),
     });
-    const fileUri = (p) => vscode.Uri.file(path.join(w.dir, p));
-    const out = (await git(w.dir, ['diff', '--name-status', '-z', '-M', mergeBase])).split('\0');
+    const baseUri = refUri(from);
+    const fileUri = to ? refUri(to) : (p) => vscode.Uri.file(path.join(w.dir, p));
+    const out = (await git(w.dir, ['diff', '--name-status', '-z', '-M', from, ...(to ? [to] : [])])).split('\0');
     for (let i = 0; i < out.length - 1;) {
       const kind = out[i++][0];
       if (kind === 'R' || kind === 'C') {
-        const from = out[i++];
-        const to = out[i++];
-        resources.push({ originalUri: baseUri(from), modifiedUri: fileUri(to) });
+        const a = out[i++];
+        const b = out[i++];
+        resources.push({ originalUri: baseUri(a), modifiedUri: fileUri(b) });
       } else {
         const p = out[i++];
         if (kind === 'A') resources.push({ originalUri: undefined, modifiedUri: fileUri(p) });
@@ -1308,40 +1330,86 @@ async function diffResources(wts) {
         else resources.push({ originalUri: baseUri(p), modifiedUri: fileUri(p) });
       }
     }
+    if (to) continue;
     const untracked = (await git(w.dir, ['ls-files', '--others', '--exclude-standard', '-z'])).split('\0').filter(Boolean);
     for (const p of untracked) resources.push({ originalUri: undefined, modifiedUri: fileUri(p) });
   }
   const signature = resources.map((r) => `${r.originalUri?.toString()}|${r.modifiedUri?.toString()}`).join('\n');
-  return { resources, signature, bases: [...bases] };
+  return { resources, signature, bases: [...bases], commits };
 }
 
-async function showDiff(ids, title) {
+// How a diff in `mode` is named: in its tab, and in the status bar
+const diffAgainst = (mode, bases) => DIFF_MODES[mode].label || `vs ${bases.join(', ')}`;
+
+async function showDiff(ids, title, { mode = 'base' } = {}) {
   const wts = ids.map((id) => worktrees.get(id)).filter(Boolean);
   if (!wts.length) return;
   let diff;
-  try { diff = await diffResources(wts); } catch (err) {
+  try { diff = await diffResources(wts, mode); } catch (err) {
     vscode.window.showErrorMessage(`Couldn't work out ${title}'s changes: ${String(err.stderr || err.message).trim().split('\n').pop()}`);
     return;
   }
-  const { resources, signature, bases } = diff;
+  const { resources, signature, bases, commits } = diff;
   if (!resources.length) {
-    vscode.window.showInformationMessage(`${title}: no changes against ${bases.join(', ')}`);
-    return;
+    vscode.window.showInformationMessage(`${title}: ${DIFF_MODES[mode].none || `no changes against ${bases.join(', ')}`}`);
+    return false;
   }
   // The worktrees' paths start with a slash, which a URI path can't take twice: a hash of them names it.
   // With this window's own id in it, so it's never mistaken for an empty diff tab from the last session.
-  const key = crypto.createHash('sha1').update([SESSION_ID, ...[...ids].sort()].join('\n')).digest('hex');
+  const key = crypto.createHash('sha1').update([SESSION_ID, mode, ...[...ids].sort()].join('\n')).digest('hex');
   // Open diffs are told apart by their tab's title (the only thing a tab shows of it), so a different
   // diff that would get the same title (say two different "3 tickets") gets a number
-  const base = `${title} · vs ${bases.join(', ')}`;
+  const base = `${title} · ${diffAgainst(mode, bases)}`;
   const taken = new Set([...openDiffs].filter(([k]) => k !== key).map(([, d]) => d.label));
   const prev = openDiffs.get(key);
   let label = prev?.label || base;
   for (let n = 2; taken.has(label); n++) label = `${base} (${n})`;
   const source = prev && prev.signature === signature ? prev.source : diffSource(key);
-  openDiffs.set(key, { label, ids, signature, stale: false, source });
+  openDiffs.set(key, { label, title, ids, mode, bases, commits, signature, stale: false, source });
   await openMultiDiff(source, label, resources);
   if (prev && prev.source !== source) closeOtherDiffTabs(label);
+  updateDiffContext();
+  return true;
+}
+
+// The diff in the active tab, if it's one of Hangar's
+function activeDiff() {
+  const label = diffTabLabel(vscode.window.tabGroups.activeTabGroup.activeTab?.label);
+  return [...openDiffs.values()].find((d) => d.label === label);
+}
+// While one is in front, the status bar says what it shows, highlighted so it's seen; a click switches
+function updateDiffContext() {
+  const d = activeDiff();
+  vscode.commands.executeCommand('setContext', 'hangar.diffActive', !!d);
+  if (!diffStatus) return;
+  if (!d) { diffStatus.hide(); return; }
+  const name = { base: `Comparing with ${d.bases.join(', ')}`, uncommitted: 'Uncommitted changes', commit: 'Last commit' }[d.mode];
+  diffStatus.text = `$(git-compare) ${name} $(chevron-down)`;
+  diffStatus.tooltip = [`${d.title}: ${DIFF_MODES[d.mode].what}`, ...(d.mode === 'commit' ? d.commits : []), 'Click to show something else'].join('\n');
+  diffStatus.show();
+}
+
+// Compare with…: what the open diff shows. It's opened again that way, in place of this one.
+async function compareWith() {
+  const d = activeDiff();
+  if (!d) {
+    vscode.window.showInformationMessage('Compare with… works on diffs Hangar opened (Diff ticket, Diff branch).');
+    return;
+  }
+  const wts = d.ids.map((id) => worktrees.get(id)).filter(Boolean);
+  const bases = [...new Set(await Promise.all(wts.map(async (w) => (await baseRef(w))?.name || 'HEAD')))].join(', ');
+  const pick = await vscode.window.showQuickPick([
+    { label: `Base branch (${bases})`, description: 'Everything on the branch: commits and uncommitted changes', mode: 'base' },
+    { label: 'Uncommitted changes', description: "Only what isn't committed yet", mode: 'uncommitted' },
+    { label: 'Last commit', description: 'What the last commit changed', mode: 'commit' },
+  ].map((o) => ({ ...o, label: `${o.mode === d.mode ? '$(check)' : '$(blank)'} ${o.label}` })),
+  { placeHolder: `Show ${d.title}'s` });
+  if (!pick || pick.mode === d.mode) return;
+  const tabs = vscode.window.tabGroups.all.flatMap((g) => g.tabs).filter((t) => diffTabLabel(t.label) === d.label);
+  if (!await showDiff(d.ids, d.title, { mode: pick.mode })) return;
+  for (const [key, v] of openDiffs) if (v === d) openDiffs.delete(key);
+  if (tabs.length) await vscode.window.tabGroups.close(tabs, true).then(undefined, () => {});
+  updateDiffContext();
 }
 
 // An open diff keeps the files it was opened with: given new ones under the same source, the editor
@@ -1373,11 +1441,14 @@ async function openMultiDiffNow(source, title, resources) {
 // The editor brings back a diff tab from the last session without the files it showed (it doesn't keep
 // them), so it would stay empty: Hangar's are closed, and Diff opens them again
 const SESSION_ID = crypto.randomUUID();
+// A Hangar diff's tab title, whatever it shows: "ABC-123 · vs main", "… · uncommitted", "… · last commit"
+// (and a number after any of them when two would share a title)
+const DIFF_TAB = new RegExp(` · (vs .+|${Object.values(DIFF_MODES).map((m) => m.label).filter(Boolean).join('|')})( \\(\\d+\\))?$`);
 function closeRestoredDiffs() {
   if (!vscode.TabInputTextMultiDiff) return;
   const known = new Set([...openDiffs.values()].map((d) => d.label));
   const stale = vscode.window.tabGroups.all.flatMap((g) => g.tabs).filter((t) => t.input instanceof vscode.TabInputTextMultiDiff
-    && / · vs /.test(t.label) && !known.has(diffTabLabel(t.label)));
+    && DIFF_TAB.test(diffTabLabel(t.label)) && !known.has(diffTabLabel(t.label)));
   if (stale.length) vscode.window.tabGroups.close(stale, true);
 }
 
@@ -1398,7 +1469,8 @@ async function refreshOpenDiffs(onlyActive = false) {
     if (onlyActive && d.label !== activeLabel) continue;
     const wts = d.ids.map((id) => worktrees.get(id)).filter(Boolean);
     let next;
-    try { next = await diffResources(wts); } catch { continue; }
+    try { next = await diffResources(wts, d.mode); } catch { continue; }
+    d.commits = next.commits;
     if (next.signature === d.signature) continue;
     if (d.label !== activeLabel) { d.stale = true; continue; }
     d.signature = next.signature;
@@ -2147,13 +2219,19 @@ function activate(ctx) {
   treeView = vscode.window.createTreeView('hangar.panel', { treeDataProvider: tree, showCollapseAll: true, canSelectMany: true });
   treeView.message = 'Loading worktrees and pull requests…';
   statusBar = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 50);
+  // Far left and highlighted: the only place by a diff Cursor lets an extension put this
+  diffStatus = vscode.window.createStatusBarItem('hangar.diffCompare', vscode.StatusBarAlignment.Left, 1000);
+  diffStatus.name = 'Hangar diff';
+  diffStatus.command = 'hangar.diffCompare';
+  diffStatus.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
   statusBar.command = 'workbench.view.extension.hangar';
-  ctx.subscriptions.push(treeView, statusBar, vscode.window.registerUriHandler(linkHandler),
+  ctx.subscriptions.push(treeView, statusBar, diffStatus, vscode.window.registerUriHandler(linkHandler),
     vscode.workspace.registerTextDocumentContentProvider('hangar-base', new BaseContent()),
     vscode.window.registerFileDecorationProvider(colors),
     vscode.window.onDidOpenTerminal(() => { tree.refresh(); writeStatus(); }),
     vscode.window.onDidCloseTerminal(() => { tree.refresh(); writeStatus(); }),
-    vscode.window.tabGroups.onDidChangeTabs(() => refreshOpenDiffs(true)),
+    vscode.window.tabGroups.onDidChangeTabs(() => { updateDiffContext(); refreshOpenDiffs(true); }),
+    vscode.window.tabGroups.onDidChangeTabGroups(() => updateDiffContext()),
     vscode.commands.registerCommand('hangar.refresh', () => {
       for (const wt of worktrees.values()) wt.prAt = 0;
       return inPanel('hangar.panel', 'Refreshing worktrees, PRs and CI…', () => poll());
@@ -2176,6 +2254,7 @@ function activate(ctx) {
       if (name) await openTicket(name);
     }),
     vscode.commands.registerCommand('hangar.diffTicket', (el, selection) => diffSelection(el, selection)),
+    vscode.commands.registerCommand('hangar.diffCompare', () => compareWith()),
     vscode.commands.registerCommand('hangar.diffWorktree', async (el, selection) => {
       if (selection?.length > 1) return diffSelection(el, selection);
       const w = worktrees.get(el.id);

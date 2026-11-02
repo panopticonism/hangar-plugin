@@ -1,6 +1,6 @@
 # Hangar
 
-Claude Code chats and tickets in the editor's sidebar, each with its own Claude, and every git worktree under the root folder grouped by ticket, with its branch, PR and CI. One window switches between them, and diffs open in the editor's multi-file diff with the working side live.
+Claude Code chats and tickets in the editor's sidebar, each with its own Claude, and every git worktree under the root folder grouped by ticket, with its branch, PR and CI. One window switches between them, and diffs open in the editor's multi-file diff with the working side live: everything on the branch against its base branch, or, with *Compare with…* (the highlighted item in the status bar while the diff is in front, or the button on the diff in VS Code and VSCodium), only what isn't committed yet or what the last commit changed.
 
 ![Hangar in VSCodium: chats and tickets in the sidebar with each Claude's status, worktrees, PRs and CI, and a ticket's Claude open beside them](media/screenshot.png)
 

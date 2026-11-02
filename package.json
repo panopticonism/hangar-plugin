@@ -2,7 +2,7 @@
 	"name": "hangar",
 	"displayName": "Hangar",
 	"description": "Claude Code chats and tickets in your sidebar, each with its own Claude, every git worktree grouped by ticket with its branch, PR and CI, one window that switches between them, and live multi-file diffs. macOS.",
-	"version": "3.1.3",
+	"version": "3.2.0",
 	"publisher": "panopticonism",
 	"license": "MIT",
 	"repository": {
@@ -121,6 +121,12 @@
 				"title": "Diff ticket",
 				"category": "Hangar",
 				"icon": "$(diff-multiple)"
+			},
+			{
+				"command": "hangar.diffCompare",
+				"title": "Compare with…",
+				"category": "Hangar",
+				"icon": "$(git-compare)"
 			},
 			{
 				"command": "hangar.diffWorktree",
@@ -288,6 +294,13 @@
 					"group": "navigation@4"
 				}
 			],
+			"editor/title": [
+				{
+					"command": "hangar.diffCompare",
+					"when": "hangar.diffActive",
+					"group": "navigation@1"
+				}
+			],
 			"view/item/context": [
 				{
 					"command": "hangar.diffTicket",
@@ -449,6 +462,10 @@
 				{
 					"command": "hangar.diffWorktree",
 					"when": "false"
+				},
+				{
+					"command": "hangar.diffCompare",
+					"when": "hangar.diffActive"
 				},
 				{
 					"command": "hangar.openPR",

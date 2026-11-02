@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.2.0
+
+- A Hangar diff can show everything on the branch against its base branch (as before), only what isn't committed yet, or what the last commit changed. While one is in front, a highlighted item in the status bar says which (*Comparing with master*, *Uncommitted changes*, *Last commit*); click it, or run *Hangar: Compare with…*, to switch. The diff switches in place and keeps up with your edits and commits. Editors that show extension buttons on a multi-file diff (VS Code, VSCodium) also have it in the diff's title bar; Cursor doesn't show them there.
+
 ## 3.1.3
 
 - Hangar's icon is the same drawing everywhere (the menu bar, the sidebar and the extension's icon), with heavier lines, a slightly taller roof and the plane's tail in the door filled in.

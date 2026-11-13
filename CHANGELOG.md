@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.3.3
+
+- The Hangar window's workspace for each root lives in the root itself, in `<root>/.hangar/` (with a `.gitignore`, and hidden in the Explorer and search). In 3.3.2 it was in `~/.local/share/hangar/workspaces/`, where the editor treated each one as untrusted: opening a ticket or chat from a trusted folder switched to a workspace in Restricted Mode, where Hangar doesn't run.
+
 ## 3.3.2
 
 - A merged or closed PR's review has one remove button, *Remove review*, which takes out its worktree, branch and Claude together. It also had *Remove merged worktree* next to it, which did nothing there.

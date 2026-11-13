@@ -18,13 +18,14 @@ const HOME = os.homedir();
 const PROMPTS_DIR = path.join(HOME, '.cache/hangar/prompts');
 const CLAUDE_SETTINGS = path.join(HOME, '.claude/settings.json');
 const SHARE_DIR = path.join(HOME, '.local/share/hangar');
-// The Hangar window's workspace: one per root, so changing the root opens that root's own and never
-// overwrites another's. Each is in a folder named by a hash of the root's path, and named after the
-// root, so the window's title says which it is. Hangar.code-workspace is where the only one used to be.
-const WORKSPACES_DIR = path.join(SHARE_DIR, 'workspaces');
+// The Hangar window's workspace: one per root, in the root's own .hangar folder, so changing the root
+// opens that root's and never overwrites another's. Being inside the root, it's trusted whenever the root
+// is: the editor decides trust per workspace file, and Hangar doesn't run in Restricted Mode. It's named
+// after the root, so the window's title says which it is. Hangar.code-workspace is where the only one
+// used to be.
+const WORKSPACE_DIR_NAME = '.hangar';
 const LEGACY_WORKSPACE_FILE = path.join(SHARE_DIR, 'Hangar.code-workspace');
-const workspaceFileFor = (root) => path.join(WORKSPACES_DIR, crypto.createHash('sha1').update(root).digest('hex').slice(0, 10),
-  `Hangar · ${path.basename(root)}.code-workspace`);
+const workspaceFileFor = (root) => path.join(root, WORKSPACE_DIR_NAME, `Hangar · ${path.basename(root)}.code-workspace`);
 const CACHE_DIR = path.join(HOME, '.cache/hangar');
 const POLL_MS = 10_000;
 // In the background (the window not focused) with no Claude working, little changes: scan this often
@@ -1242,6 +1243,8 @@ function updateStatusBar() {
 function writeWorkspace(folders) {
   const file = workspaceFileFor(ROOT);
   fs.mkdirSync(path.dirname(file), { recursive: true });
+  // Never part of a repo the root may be
+  fs.writeFileSync(path.join(path.dirname(file), '.gitignore'), '*\n');
   const ws = {
     folders,
     settings: {
@@ -1253,8 +1256,8 @@ function writeWorkspace(folders) {
       // Child rows' icons line up with the text above (Hangar: branch → its PR)
       'workbench.tree.indent': 20,
       // Other tickets' worktrees and the repos' own checkouts stay out of the file tree and search
-      'files.exclude': Object.fromEntries(['worktrees', '.claude/worktrees'].filter((d) => fs.existsSync(path.join(ROOT, d))).map((d) => [d, true])),
-      'search.exclude': Object.fromEntries(['worktrees', '.claude/worktrees', 'repos'].filter((d) => fs.existsSync(path.join(ROOT, d))).map((d) => [d, true])),
+      'files.exclude': { [WORKSPACE_DIR_NAME]: true, ...Object.fromEntries(['worktrees', '.claude/worktrees'].filter((d) => fs.existsSync(path.join(ROOT, d))).map((d) => [d, true])) },
+      'search.exclude': { [WORKSPACE_DIR_NAME]: true, ...Object.fromEntries(['worktrees', '.claude/worktrees', 'repos'].filter((d) => fs.existsSync(path.join(ROOT, d))).map((d) => [d, true])) },
     },
   };
   fs.writeFileSync(file, JSON.stringify(ws, null, 2));
@@ -1263,7 +1266,8 @@ function writeWorkspace(folders) {
 
 function isHangarWindow() {
   const file = vscode.workspace.workspaceFile?.fsPath;
-  return !!file && (file === LEGACY_WORKSPACE_FILE || path.dirname(path.dirname(file)) === WORKSPACES_DIR);
+  return !!file && (file === LEGACY_WORKSPACE_FILE
+    || (path.basename(path.dirname(file)) === WORKSPACE_DIR_NAME && /^Hangar · .*\.code-workspace$/.test(path.basename(file))));
 }
 
 // The window's folders after its own (the root): a ticket's worktrees, or the folder a chat runs in if

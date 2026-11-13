@@ -61,7 +61,8 @@ Each Claude starts with a short note on its chat or ticket, appended to its syst
 | `~/.cache/hangar/requests/` | Links (`<scheme>://panopticonism.hangar/{open,diff}?ticket=…`) handed to the Hangar window. |
 | `~/.cache/hangar/prompts/` | What each Claude is told when it starts. |
 | `~/.cache/hangar/status.json` | What the menu bar shows (only with `hangar.menuBar` on). |
-| `~/.local/share/hangar/` | The hook script, the menu bar icon, `link-key` (see Links), and in `workspaces/` the Hangar window's workspace file for each root folder (one per root, so changing the root never overwrites another's). |
+| `~/.local/share/hangar/` | The hook script, the menu bar icon and `link-key` (see Links). |
+| `<root>/.hangar/` | The Hangar window's workspace for that root folder (one per root, so changing the root never overwrites another's; inside the root so it's trusted whenever the root is), with a `.gitignore` so git never sees it. Hidden in the Hangar window's Explorer and search. |
 | `~/.claude/projects/` | Read for each conversation's title; a chat's conversation is moved within it when the chat becomes a ticket. |
 | SwiftBar's plugin folder | `hangar.5s.js` (only with `hangar.menuBar` on). |
 | Your repos | Worktrees, created and removed only when you ask (*Add repo to ticket…*, *Remove merged worktree*, *New review…*, *Remove review*) or by Claude for its ticket. |

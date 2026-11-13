@@ -18,7 +18,13 @@ const HOME = os.homedir();
 const PROMPTS_DIR = path.join(HOME, '.cache/hangar/prompts');
 const CLAUDE_SETTINGS = path.join(HOME, '.claude/settings.json');
 const SHARE_DIR = path.join(HOME, '.local/share/hangar');
-const WORKSPACE_FILE = path.join(SHARE_DIR, 'Hangar.code-workspace');
+// The Hangar window's workspace: one per root, so changing the root opens that root's own and never
+// overwrites another's. Each is in a folder named by a hash of the root's path, and named after the
+// root, so the window's title says which it is. Hangar.code-workspace is where the only one used to be.
+const WORKSPACES_DIR = path.join(SHARE_DIR, 'workspaces');
+const LEGACY_WORKSPACE_FILE = path.join(SHARE_DIR, 'Hangar.code-workspace');
+const workspaceFileFor = (root) => path.join(WORKSPACES_DIR, crypto.createHash('sha1').update(root).digest('hex').slice(0, 10),
+  `Hangar · ${path.basename(root)}.code-workspace`);
 const CACHE_DIR = path.join(HOME, '.cache/hangar');
 const POLL_MS = 10_000;
 // In the background (the window not focused) with no Claude working, little changes: scan this often
@@ -983,11 +989,11 @@ class Tree {
   // An empty group says so, and clicking starts one
   emptyItem(what, root) {
     const e = {
-      chats: { label: 'No chats yet', icon: 'comment-discussion', command: 'hangar.newChat', title: 'New chat',
+      chats: { label: 'No chats yet', icon: 'comment-discussion', command: 'hangar.newChat', title: 'New chat…',
         tooltip: `Start a chat with Claude in ${projectName(root)}` },
-      tickets: { label: 'No tickets yet', icon: 'tag', command: 'hangar.newTicket', title: 'New ticket',
+      tickets: { label: 'No tickets yet', icon: 'tag', command: 'hangar.newTicket', title: 'New ticket…',
         tooltip: 'Start a ticket: give its ID and Claude adds the repos it needs' },
-      reviews: { label: 'No reviews yet', icon: 'eye', command: 'hangar.newReview', title: 'New review',
+      reviews: { label: 'No reviews yet', icon: 'eye', command: 'hangar.newReview', title: 'New review…',
         tooltip: 'Review a pull request: give its number or link, and Claude reviews it in a worktree of its own' },
     }[what];
     const item = new vscode.TreeItem(e.label, vscode.TreeItemCollapsibleState.None);
@@ -1232,8 +1238,10 @@ function updateStatusBar() {
 
 // ---- switching tickets ----
 
+// Writes the root's workspace with `folders` (the root first) and gives its path
 function writeWorkspace(folders) {
-  fs.mkdirSync(path.dirname(WORKSPACE_FILE), { recursive: true });
+  const file = workspaceFileFor(ROOT);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
   const ws = {
     folders,
     settings: {
@@ -1249,11 +1257,13 @@ function writeWorkspace(folders) {
       'search.exclude': Object.fromEntries(['worktrees', '.claude/worktrees', 'repos'].filter((d) => fs.existsSync(path.join(ROOT, d))).map((d) => [d, true])),
     },
   };
-  fs.writeFileSync(WORKSPACE_FILE, JSON.stringify(ws, null, 2));
+  fs.writeFileSync(file, JSON.stringify(ws, null, 2));
+  return file;
 }
 
 function isHangarWindow() {
-  return vscode.workspace.workspaceFile?.fsPath === WORKSPACE_FILE;
+  const file = vscode.workspace.workspaceFile?.fsPath;
+  return !!file && (file === LEGACY_WORKSPACE_FILE || path.dirname(path.dirname(file)) === WORKSPACES_DIR);
 }
 
 // The window's folders after its own (the root): a ticket's worktrees, or the folder a chat runs in if
@@ -1294,9 +1304,9 @@ async function openTicket(name, { showClaude = true } = {}) {
   if (!isHangarWindow()) {
     // One-time: turn this window into the Hangar window. The root is the first folder from
     // then on, so later switches only swap the folders after it and nothing restarts.
-    writeWorkspace([{ name: path.basename(ROOT), path: ROOT }, ...wanted.map((f) => ({ name: f.name, path: f.uri.fsPath }))]);
+    const file = writeWorkspace([{ name: path.basename(ROOT), path: ROOT }, ...wanted.map((f) => ({ name: f.name, path: f.uri.fsPath }))]);
     await context.globalState.update('hangar.pendingTicket', name);
-    await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(WORKSPACE_FILE), { forceNewWindow: false });
+    await vscode.commands.executeCommand('vscode.openFolder', vscode.Uri.file(file), { forceNewWindow: false });
     return;
   }
   const current = (vscode.workspace.workspaceFolders || []).slice(1);
@@ -1832,7 +1842,7 @@ function parsePRInput(v) {
   // A link to one of its tabs (…/pull/42/files) is the PR's link
   m = v.match(/^(https?:\/\/[^/\s]+\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+))(?:[/?#]\S*)?$/);
   return m ? { owner: m[2].toLowerCase(), name: m[3].toLowerCase(), number: Number(m[4]), url: m[1],
-    repoUrl: m[1].replace(/\/pull\/\d+$/, ''), repoName: m[3] } : null;
+    repoUrl: m[1].replace(/\/pull\/\d+$/, ''), repoName: m[3], label: `${m[2]}/${m[3]}` } : null;
 }
 
 // The owner/name of each GitHub repo a local repo has as a remote
@@ -1861,7 +1871,7 @@ function cloneTarget(root, name) {
 // work), and gives the repo's name in the project once it's cloned
 async function offerClone(root, want) {
   const target = cloneTarget(root, want.repoName);
-  const what = `${want.owner}/${want.name}`;
+  const what = want.label;
   if (!target) {
     vscode.window.showWarningMessage(`None of the repos in ${projectName(root)} has ${what} as a remote, and ${projectName(root)} is a single repo, so there's nowhere to clone it. Add a project that holds it, then try again.`);
     return null;
@@ -1884,15 +1894,18 @@ async function offerClone(root, want) {
   return [...reposIn(root)].find(([, dir]) => dir === target)?.[0] || null;
 }
 
-// A review: the PR checked out in a worktree of its own, next to the repo
-// (<repo>.worktrees/review-pr-<number>) on a branch named after its title (reviewBranchName), by gh so it works for PRs
-// from forks too, and a Claude reviewing it there. It starts in the background: the window stays
-// where it is, and you're told when Claude has finished.
+// gh without its prompts, which would wait on a terminal nobody sees
+const ghQuiet = (args, cwd) => run('gh', args, { cwd, env: { ...ENV, GH_PROMPT_DISABLED: '1' } });
+
+// A review: the PR checked out in a worktree of its own, next to its repo, wherever that is in Hangar.
+// A link names its repo; for a bare number you pick the repo (unless there's only one). Started from a
+// project's Reviews group, only that project's repos count.
+// The worktree goes in <repo>.worktrees/review-pr-<number>, on a branch named after the PR's title
+// (reviewBranchName), checked out by gh so PRs from forks work too, and a Claude reviews it there. It
+// starts in the background: the window stays where it is, and you're told when Claude has finished.
 async function newReview(el) {
-  const root = await pickProject(el, 'review');
-  if (!root) return;
   const input = (await vscode.window.showInputBox({
-    title: `New review in ${projectName(root)}: Claude reviews the PR in a worktree of its own`,
+    title: 'New review: Claude reviews the PR in a worktree of its own',
     prompt: "The PR's number, or its link on GitHub",
     placeHolder: '42  or  https://github.com/owner/repo/pull/42',
     validateInput: (v) => parsePRInput(v) ? undefined : 'A PR number, or a link to a pull request on GitHub',
@@ -1900,23 +1913,40 @@ async function newReview(el) {
   if (!input) return;
   const want = parsePRInput(input);
   findRepos();
-  const names = repoNames(root);
-  if (!names.length && !want.url) {
-    vscode.window.showWarningMessage(`${projectName(root)} has no git repos to check a PR out in.`);
+  const roots = el?.root ? [el.root] : projects();
+  if (!roots.length) {
+    vscode.window.showWarningMessage('Hangar has no projects yet: open a folder, or add one with Add project…');
     return;
   }
-  // A link names its repo; a bare number is in the project's only repo, else the one picked
-  let repo;
+  const where = roots.length === 1 ? projectName(roots[0]) : 'Hangar';
+  const all = roots.flatMap((root) => repoNames(root).map((repo) => ({ root, repo, dir: repoDir(repo, root) })));
+  let found;
   if (want.url) {
-    const slugs = await Promise.all(names.map((r) => remoteSlugs(repoDir(r, root))));
-    repo = names.find((r, i) => slugs[i].has(`${want.owner}/${want.name}`)) || await offerClone(root, want);
-    if (!repo) return;
+    const slugs = await Promise.all(all.map((r) => remoteSlugs(r.dir)));
+    found = all.find((r, i) => slugs[i].has(`${want.owner}/${want.name}`));
+    if (!found) {
+      // Cloned into a project that can hold another repo: the one it was started from, the only one, or the one picked
+      const fits = roots.filter((r) => cloneTarget(r, want.repoName));
+      const root = fits.length <= 1 ? fits[0] || roots[0]
+        : (await vscode.window.showQuickPick(fits.map((r) => ({ label: projectName(r), description: r.replace(HOME, '~'), root: r })),
+          { placeHolder: `No repo in ${where} has ${want.label}. Clone it into which project?` }))?.root;
+      if (!root) return;
+      const repo = await offerClone(root, want);
+      if (!repo) return;
+      found = { root, repo, dir: repoDir(repo, root) };
+    }
   } else {
-    repo = names.length === 1 ? names[0]
-      : (await vscode.window.showQuickPick(names, { placeHolder: `Which repo is PR #${want.number} in?` }));
-    if (!repo) return;
+    if (!all.length) {
+      vscode.window.showWarningMessage(`${where} has no git repos to check PR #${want.number} out in.`);
+      return;
+    }
+    const several = roots.length > 1;
+    found = all.length === 1 ? all[0] : (await vscode.window.showQuickPick(all.map((r) => ({
+      label: r.repo, description: several ? projectName(r.root) : '', r,
+    })), { placeHolder: `Which repo is PR #${want.number} in?`, matchOnDescription: true }))?.r;
+    if (!found) return;
   }
-  const dir = repoDir(repo, root);
+  const { root, repo, dir } = found;
   const id = `${repo}#${want.number}`;
   const name = `review:${id}`;
   if (reviews[id]) {
@@ -1924,7 +1954,7 @@ async function newReview(el) {
     if (pick) await openTicket(name);
     return;
   }
-  const gh = (args, cwd) => run('gh', args, { cwd, env: { ...ENV, GH_PROMPT_DISABLED: '1' } });
+  const gh = ghQuiet;
   const failed = (what, err) => vscode.window.showErrorMessage(`${what}: ${String(err.stderr || err.message).trim().split('\n').pop()}`);
   const made = await inPanel('hangar.panel', `Checking out ${repo} #${want.number} for review…`, async () => {
     let pr;
@@ -2369,7 +2399,7 @@ function writeStatus() {
       extension: extensionId,
       // The editor's .app, from where it keeps its own files (…/X.app/Contents/Resources/app)
       app: vscode.env.appRoot.replace(/\/Contents\/Resources\/app$/, ''),
-      workspace: WORKSPACE_FILE,
+      workspace: vscode.workspace.workspaceFile?.fsPath,
       active: activeTicket,
       running: names.filter((n) => claudeTerminalFor(n)),
       chats: Object.values(chats).map((c) => ({ name: `chat:${c.id}`, title: c.title || 'New chat', folder: projectName(chatCwd(c)), at: c.at || 0,

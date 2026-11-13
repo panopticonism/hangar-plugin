@@ -1,5 +1,12 @@
 # Changelog
 
+## 3.3.2
+
+- A merged or closed PR's review has one remove button, *Remove review*, which takes out its worktree, branch and Claude together. It also had *Remove merged worktree* next to it, which did nothing there.
+- *New review…* has an icon of its own (a code review bubble) instead of the eye that marks the Reviews section. *New chat* is now *New chat…*, like Hangar's other New commands, and *Open ticket or chat…* is *Open ticket, chat or review…*, since it lists reviews too.
+- *New review…* no longer starts by naming or asking for a project. A PR link finds its repo in any of Hangar's projects (and if none has it, offers to clone it, asking which project when more than one could take it). For a bare number, it asks which repo, from every project's repos, unless there's only one. Started from a project's Reviews group, it only looks in that project.
+- Each root folder has a Hangar window workspace of its own (in `~/.local/share/hangar/workspaces/`, its window titled *Hangar · <folder>*), instead of one file every root shared and rewrote. Opening Hangar from a window on another folder no longer overwrites the other root's folders and settings. The old `Hangar.code-workspace` still opens as the Hangar window.
+
 ## 3.3.1
 
 - *New review…* with a link to a PR in a repo the project doesn't have offers to clone it (with `gh repo clone`, into the project's folder of repos, or `repos/` in a meta-repo), then carries on with the review.

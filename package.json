@@ -2,7 +2,7 @@
 	"name": "hangar",
 	"displayName": "Hangar",
 	"description": "Claude Code chats, tickets and PR reviews in your sidebar, each with its own Claude, every git worktree grouped by ticket with its branch, PR and CI, one window that switches between them, and live multi-file diffs. macOS.",
-	"version": "3.3.1",
+	"version": "3.3.2",
 	"publisher": "panopticonism",
 	"license": "MIT",
 	"repository": {
@@ -113,7 +113,7 @@
 			},
 			{
 				"command": "hangar.openTicket",
-				"title": "Open ticket or chat…",
+				"title": "Open ticket, chat or review…",
 				"category": "Hangar",
 				"icon": "$(arrow-right)"
 			},
@@ -184,7 +184,7 @@
 			},
 			{
 				"command": "hangar.newChat",
-				"title": "New chat",
+				"title": "New chat…",
 				"category": "Hangar",
 				"icon": "$(comment-discussion)"
 			},
@@ -204,7 +204,7 @@
 				"command": "hangar.newReview",
 				"title": "New review…",
 				"category": "Hangar",
-				"icon": "$(eye)"
+				"icon": "$(code-review)"
 			},
 			{
 				"command": "hangar.openThisReview",
@@ -350,7 +350,7 @@
 				},
 				{
 					"command": "hangar.removeWorktree",
-					"when": "view == hangar.panel && viewItem =~ /\\.removable/",
+					"when": "view == hangar.panel && viewItem =~ /^worktree.*\\.removable/",
 					"group": "inline@3"
 				},
 				{
@@ -470,7 +470,7 @@
 				},
 				{
 					"command": "hangar.removeWorktree",
-					"when": "view == hangar.panel && viewItem =~ /\\.removable/",
+					"when": "view == hangar.panel && viewItem =~ /^worktree.*\\.removable/",
 					"group": "9_remove@1"
 				},
 				{

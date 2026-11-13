@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // <xbar.title>Hangar</xbar.title>
-// <xbar.desc>What each Hangar chat's and ticket's Claude is doing, and failing CI.</xbar.desc>
+// <xbar.desc>What each Hangar chat's, ticket's and review's Claude is doing, and failing CI.</xbar.desc>
 // <swiftbar.hideAbout>true</swiftbar.hideAbout>
 // <swiftbar.hideRunInTerminal>true</swiftbar.hideRunInTerminal>
 // <swiftbar.hideLastUpdated>true</swiftbar.hideLastUpdated>
@@ -9,9 +9,10 @@
 //
 // Hangar in the Mac menu bar (SwiftBar runs this every 5 seconds). The Hangar extension installs
 // it, with the Node it runs on, when its hangar.menuBar setting is on, and keeps it up to date. It reads:
-//   ~/.cache/hangar/status.json   the Hangar window's chats, tickets, PRs and CI, and which Claudes run
+//   ~/.cache/hangar/status.json   the Hangar window's chats, tickets, reviews, PRs and CI, and which Claudes run
 //   ~/.cache/hangar/agents/       what each Claude is doing, from its hooks (fresher than the above)
 //   ~/.cache/hangar/chats/        the chats, for when the Hangar window isn't open
+//   ~/.cache/hangar/reviews/      the reviews, likewise
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
@@ -87,6 +88,8 @@ const workspace = status?.workspace || path.join(HOME, '.local/share/hangar/Hang
 const chats = open ? status.chats
   : jsonIn(path.join(CACHE, 'chats')).filter((c) => c.id).map((c) => ({ name: `chat:${c.id}`, title: c.title || 'New chat', folder: path.basename(c.cwd || c.root || ''), at: c.at || 0 }));
 const tickets = status?.tickets || [];
+const reviews = open ? status.reviews || []
+  : jsonIn(path.join(CACHE, 'reviews')).filter((r) => r.id).map((r) => ({ name: `review:${r.id}`, title: `#${r.number} ${r.title || ''}`.trim(), folder: r.repo }));
 
 // A Claude only counts as running if the open Hangar window has its terminal: the hooks can't tell
 // when a window closes, so their last word may be "working" for a Claude that's gone
@@ -118,10 +121,13 @@ const items = [
   // A chat's worktrees (its Claude made some) show like a ticket's: their CI and PRs
   ...chats.map((c) => ({ name: c.name, label: clean(c.title), note: c.folder, chat: true, thread: c, color: c.color })),
   ...tickets.map((t) => ({ name: t.name, label: clean(t.name), note: t.draft ? 'no repos yet' : [...new Set(t.repos)].join(', '), thread: t, color: t.color })),
+  // A review leads with its repo and number, like its row in the panel
+  ...reviews.map((r) => ({ name: r.name, label: clean(`${r.folder} ${String(r.title).replace(/^(#\d+).*/, '$1')}`), note: String(r.title).replace(/^#\d+\s*/, ''), review: true, thread: r, color: r.color })),
 ].map((it) => ({ ...it, state: stateOf(it.name), at: agents[it.name]?.at || 0 }));
 items.sort((a, b) => b.at - a.at);
 
-const failing = items.filter((it) => it.thread?.ci === 'fail');
+// Someone else's PR failing CI isn't yours to fix: a review's row says so, but it isn't counted
+const failing = items.filter((it) => it.thread?.ci === 'fail' && !it.review);
 const count = (s) => items.filter((it) => it.state === s).length;
 const needs = count('needs-input');
 const working = count('working');
@@ -138,9 +144,11 @@ const row = (it) => {
   const failed = it.thread?.ci === 'fail';
   const ci = failed ? ' ✗ CI failed' : it.thread?.ci === 'pending' ? ' ◌ CI running' : '';
   const when = it.state === 'needs-input' || it.state === 'working' ? ` · ${since(it.at)}` : '';
-  // Its icon in the chat's or ticket's own color, the one it has in the Hangar panel
-  const icon = /^#[0-9a-f]{6},#[0-9a-f]{6}$/i.test(it.color || '')
-    ? `image=${mark(pick(it.color), it.chat ? 'chat' : 'tag')}`
+  // Its icon in the chat's or ticket's own color, the one it has in the Hangar panel (a review's is
+  // the system's eye, tinted)
+  const colored = /^#[0-9a-f]{6},#[0-9a-f]{6}$/i.test(it.color || '');
+  const icon = it.review ? `sfimage=eye${colored ? ` sfcolor=${pick(it.color)}` : ''}`
+    : colored ? `image=${mark(pick(it.color), it.chat ? 'chat' : 'tag')}`
     : `sfimage=${it.chat ? 'bubble.left' : 'tag'}`;
   out.push(`${it.label}${it.note ? `${DIM}  ${clean(it.note)}${RESET}` : ''}${ci}${when} | href=${link(it.name)} ${icon} ansi=true${failed ? ` color=${pick('#cf222e,#ff7b72')}` : ''}`);
   const prs = it.thread?.prs || [];
@@ -175,7 +183,7 @@ if (stopped.length) {
   const at = out.findIndex((l) => l.startsWith(`Not running (${stopped.length})`));
   out[at] = `Not running (${stopped.length}) | color=gray`;
 }
-if (!items.length) out.push('No chats or tickets yet | color=gray');
+if (!items.length) out.push('No chats, tickets or reviews yet | color=gray');
 out.push('---');
 out.push(`Open Hangar | bash=/usr/bin/open param1=-a param2="${app}" param3="${workspace}" terminal=false`);
 out.push('Refresh | refresh=true');

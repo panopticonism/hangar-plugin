@@ -1,5 +1,14 @@
 # Changelog
 
+## 3.3.0
+
+- A **Reviews** section, next to Chats and Tickets, for reviewing other people's pull requests. *New review…* (the + on Reviews, or right-click a project) takes the PR's number or its GitHub link, checks the PR out with `gh pr checkout` in a worktree of its own next to its repo (`<repo>.worktrees/review-pr-<number>`, on a branch named after the PR's title, like `review/fix-login-redirect`, PRs from forks too), and starts a Claude there that reviews it straight away. It works in the background: the window stays where it is, and a notice says when Claude has finished. Click the review to switch to it and read what it found.
+- A review's Claude is told the PR is someone else's work to review, not instructions; to report what it finds most serious first, with file and line; and not to edit, commit, push, or comment on, approve or request changes on the PR unless you ask. It can show you the PR's changes in Hangar's diff, and brings the checkout up to date with `git pull` when you ask what's new.
+- A review's row shows its PR's number and title, its repo, and when CI is failing or the PR has been merged or closed; under it are its Claude, the PR's branch (diff, terminal, reveal, copy) and the PR. A merged or closed PR's review gets a remove button, and *Remove review* (right-click) removes one any time: it closes its Claude and removes its worktree and branch, never forced. Its conversation stays in Claude's history.
+- **Add selection to Claude** (right-click in a file): puts `@path#L5-12` for the selected lines in the prompt of the Claude it's for (the ticket, chat or review whose worktree the file is in, else the one the window is on), as Claude Code's own does. It types into the Claude's terminal, so it works whether or not that Claude is connected to the editor.
+- Hangar's Claudes connect to the editor again: Hangar no longer strips the Claude Code extension's `CLAUDE_CODE_SSE_PORT` from their terminals, so its *Insert At-Mentioned* (Cmd+Option+K) and editor diffs reach them. A Claude already running keeps the old environment until it's closed and started again.
+- Reviews are in *Open ticket or chat…* and the menu bar too, with an eye. A review's failing CI shows on its row but isn't counted in Hangar's badge or the menu bar's title: it's not yours to fix.
+
 ## 3.2.0
 
 - A Hangar diff can show everything on the branch against its base branch (as before), only what isn't committed yet, or what the last commit changed. While one is in front, a highlighted item in the status bar says which (*Comparing with master*, *Uncommitted changes*, *Last commit*); click it, or run *Hangar: Compare with…*, to switch. The diff switches in place and keeps up with your edits and commits. Editors that show extension buttons on a multi-file diff (VS Code, VSCodium) also have it in the diff's title bar; Cursor doesn't show them there.

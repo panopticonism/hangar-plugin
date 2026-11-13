@@ -1,8 +1,8 @@
 {
 	"name": "hangar",
 	"displayName": "Hangar",
-	"description": "Claude Code chats and tickets in your sidebar, each with its own Claude, every git worktree grouped by ticket with its branch, PR and CI, one window that switches between them, and live multi-file diffs. macOS.",
-	"version": "3.2.0",
+	"description": "Claude Code chats, tickets and PR reviews in your sidebar, each with its own Claude, every git worktree grouped by ticket with its branch, PR and CI, one window that switches between them, and live multi-file diffs. macOS.",
+	"version": "3.3.0",
 	"publisher": "panopticonism",
 	"license": "MIT",
 	"repository": {
@@ -21,6 +21,7 @@
 		"git worktree",
 		"tickets",
 		"pull requests",
+		"code review",
 		"agents"
 	],
 	"engines": {
@@ -200,6 +201,30 @@
 				"icon": "$(close)"
 			},
 			{
+				"command": "hangar.newReview",
+				"title": "New review…",
+				"category": "Hangar",
+				"icon": "$(eye)"
+			},
+			{
+				"command": "hangar.openThisReview",
+				"title": "Open review",
+				"category": "Hangar",
+				"icon": "$(arrow-right)"
+			},
+			{
+				"command": "hangar.diffReview",
+				"title": "Diff the PR",
+				"category": "Hangar",
+				"icon": "$(diff-multiple)"
+			},
+			{
+				"command": "hangar.removeReview",
+				"title": "Remove review",
+				"category": "Hangar",
+				"icon": "$(trash)"
+			},
+			{
 				"command": "hangar.stopClaude",
 				"title": "Stop (interrupt Claude)",
 				"category": "Hangar",
@@ -269,6 +294,12 @@
 				"title": "Remove project from Hangar",
 				"category": "Hangar",
 				"icon": "$(close)"
+			},
+			{
+				"command": "hangar.sendSelection",
+				"title": "Add selection to Claude",
+				"category": "Hangar",
+				"icon": "$(sparkle)"
 			}
 		],
 		"menus": {
@@ -333,6 +364,31 @@
 					"group": "inline@2"
 				},
 				{
+					"command": "hangar.diffReview",
+					"when": "view == hangar.panel && viewItem =~ /^review(\\.|$)/",
+					"group": "inline@1"
+				},
+				{
+					"command": "hangar.removeReview",
+					"when": "view == hangar.panel && viewItem == review.removable",
+					"group": "inline@2"
+				},
+				{
+					"command": "hangar.openThisReview",
+					"when": "view == hangar.panel && viewItem =~ /^review(\\.|$)/",
+					"group": "1_open@1"
+				},
+				{
+					"command": "hangar.diffReview",
+					"when": "view == hangar.panel && viewItem =~ /^review(\\.|$)/",
+					"group": "1_open@2"
+				},
+				{
+					"command": "hangar.removeReview",
+					"when": "view == hangar.panel && viewItem =~ /^review(\\.|$)/",
+					"group": "9_remove@1"
+				},
+				{
 					"command": "hangar.stopClaude",
 					"when": "view == hangar.panel && viewItem == agent.live.busy",
 					"group": "inline@1"
@@ -384,27 +440,27 @@
 				},
 				{
 					"command": "hangar.diffWorktree",
-					"when": "view == hangar.panel && viewItem =~ /^worktree(\\.pr)?(\\.removable)?$/",
+					"when": "view == hangar.panel && viewItem =~ /^worktree(\\.pr)?(\\.removable|\\.review)?$/",
 					"group": "1_open@1"
 				},
 				{
 					"command": "hangar.terminalInWorktree",
-					"when": "view == hangar.panel && viewItem =~ /^worktree(\\.pr)?(\\.removable)?$/",
+					"when": "view == hangar.panel && viewItem =~ /^worktree(\\.pr)?(\\.removable|\\.review)?$/",
 					"group": "1_open@2"
 				},
 				{
 					"command": "hangar.revealWorktree",
-					"when": "view == hangar.panel && viewItem =~ /^worktree(\\.pr)?(\\.removable)?$/",
+					"when": "view == hangar.panel && viewItem =~ /^worktree(\\.pr)?(\\.removable|\\.review)?$/",
 					"group": "1_open@3"
 				},
 				{
 					"command": "hangar.copyBranch",
-					"when": "view == hangar.panel && viewItem =~ /^worktree(\\.pr)?(\\.removable)?$/",
+					"when": "view == hangar.panel && viewItem =~ /^worktree(\\.pr)?(\\.removable|\\.review)?$/",
 					"group": "3_copy@1"
 				},
 				{
 					"command": "hangar.copyPath",
-					"when": "view == hangar.panel && viewItem =~ /^worktree(\\.pr)?(\\.removable)?$/",
+					"when": "view == hangar.panel && viewItem =~ /^worktree(\\.pr)?(\\.removable|\\.review)?$/",
 					"group": "3_copy@2"
 				},
 				{
@@ -438,6 +494,11 @@
 					"group": "inline@1"
 				},
 				{
+					"command": "hangar.newReview",
+					"when": "view == hangar.panel && viewItem == reviews",
+					"group": "inline@1"
+				},
+				{
 					"command": "hangar.removeProject",
 					"when": "view == hangar.panel && viewItem == project",
 					"group": "inline@1"
@@ -451,6 +512,11 @@
 					"command": "hangar.newTicket",
 					"when": "view == hangar.panel && viewItem =~ /^project/",
 					"group": "1_new@2"
+				},
+				{
+					"command": "hangar.newReview",
+					"when": "view == hangar.panel && viewItem =~ /^project/",
+					"group": "1_new@3"
 				},
 				{
 					"command": "hangar.removeProject",
@@ -542,6 +608,29 @@
 				{
 					"command": "hangar.moveWorktree",
 					"when": "false"
+				},
+				{
+					"command": "hangar.openThisReview",
+					"when": "false"
+				},
+				{
+					"command": "hangar.removeReview",
+					"when": "false"
+				},
+				{
+					"command": "hangar.diffReview",
+					"when": "false"
+				},
+				{
+					"command": "hangar.sendSelection",
+					"when": "editorIsOpen"
+				}
+			],
+			"editor/context": [
+				{
+					"command": "hangar.sendSelection",
+					"when": "resourceScheme == file",
+					"group": "0_hangar@1"
 				}
 			]
 		},

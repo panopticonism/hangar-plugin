@@ -1,11 +1,12 @@
 # Hangar
 
-Claude Code chats and tickets in the editor's sidebar, each with its own Claude, and every git worktree under the root folder grouped by ticket, with its branch, PR and CI. One window switches between them, and diffs open in the editor's multi-file diff with the working side live: everything on the branch against its base branch, or, with *Compare with…* (the highlighted item in the status bar while the diff is in front, or the button on the diff in VS Code and VSCodium), only what isn't committed yet or what the last commit changed.
+Claude Code chats, tickets and PR reviews in the editor's sidebar, each with its own Claude, and every git worktree under the root folder grouped by ticket, with its branch, PR and CI. One window switches between them, and diffs open in the editor's multi-file diff with the working side live: everything on the branch against its base branch, or, with *Compare with…* (the highlighted item in the status bar while the diff is in front, or the button on the diff in VS Code and VSCodium), only what isn't committed yet or what the last commit changed.
 
 ![Hangar in VSCodium: chats and tickets in the sidebar with each Claude's status, worktrees, PRs and CI, and a ticket's Claude open beside them](media/screenshot.png)
 
 - **Chats**: Claude in a folder with no ticket or branch. When a chat grows into real work, *Turn it into a ticket thread* keeps the conversation and gives it worktrees. If the chat's Claude made a branch anyway, its worktree shows under the chat and goes with it. A chat that ran in a folder inside its project has its conversation moved to the project's history, where the ticket's Claude runs.
 - **Tickets**: Claude at the root plus a worktree per repo it touches, all on one branch. Worktrees are found from git itself, wherever they live, and filed under the ticket their branch names (`bug/abc-123-…` → ABC-123), the ticket that was started with that branch, or the ticket whose Claude reported making it. One filed under the wrong ticket can be moved with *Move to ticket…* (right-click its branch; a worktree's actions are all on its branch row). A ticket can hold more than one branch; several worktrees of one repo share its row in the panel, with a branch row for each.
+- **Reviews**: someone's pull request, reviewed by a Claude of its own. *New review…* (the + on Reviews) takes the PR's number or its link, checks it out with `gh pr checkout` in a worktree next to its repo (`<repo>.worktrees/review-pr-<number>`, on a branch named after the PR's title, like `review/fix-login-redirect`; forks too), and starts Claude there in the background: the window stays where it is, and you're told when Claude has finished. Click the review to switch to it and read what it found. Its Claude is told to report its findings to you and not to edit, push, or comment on the PR on GitHub unless you ask. Once the PR is merged or closed, the review gets a remove button; *Remove review* (right-click) takes it out any time, with its worktree and branch, never forced.
 
 Works in VSCodium, Cursor and VS Code, **on macOS**. Other systems aren't supported yet.
 
@@ -17,7 +18,7 @@ Download the `.vsix` for your Mac (`darwin-arm64` for Apple silicon, `darwin-x64
 
 - [Claude Code](https://docs.anthropic.com/en/docs/claude-code) (`claude` on your PATH): each chat and ticket runs one in an editor terminal.
 - `git`.
-- Optional: [`gh`](https://cli.github.com), signed in, for PR, review and CI status. Without it, the PR rows say *No PR*. When it can't reach GitHub (signed out, offline, rate limited), a PR keeps its last status, marked *not up to date*, and one not seen yet says *PR status unavailable*. A check that ran more than once counts by its latest run, so a run that a newer one cancelled doesn't fail CI.
+- Optional: [`gh`](https://cli.github.com), signed in, for PR, review and CI status, and for Reviews. Without it, the PR rows say *No PR*. When it can't reach GitHub (signed out, offline, rate limited), a PR keeps its last status, marked *not up to date*, and one not seen yet says *PR status unavailable*. A check that ran more than once counts by its latest run, so a run that a newer one cancelled doesn't fail CI.
 - Optional: `git gtr` creates and removes worktrees when it's installed; without it, worktrees go next to the repo as `<repo>.worktrees/<branch>`.
 - Optional: [SwiftBar](https://swiftbar.app), for the menu bar.
 
@@ -38,7 +39,7 @@ On first start Hangar asks to add Claude Code hooks to `~/.claude/settings.json`
 
 Off by default: the Hangar window asks once whether to turn it on (after the agent status question), and after that it's the `hangar.menuBar` setting. With it on and [SwiftBar](https://swiftbar.app) installed (open it once to choose its plugin folder), Hangar puts `hangar.5s.js` in SwiftBar's plugin folder and keeps it up to date; turning the setting off takes it out again. The script runs with the Node the editor found, since SwiftBar's PATH has neither nvm nor Homebrew.
 
-The menu bar shows Hangar's icon, how many Claudes are waiting on you or working, and failing CI. Each chat and ticket in the menu says when its CI is failing or still running. The menu lists every chat and ticket by what its Claude is doing, with each ticket's PRs; clicking one opens it in the Hangar window of the editor it runs in. It reads `~/.cache/hangar/status.json`, which the Hangar window writes with each scan (every 10 seconds, or every 60 while it's in the background and no Claude is working), and the hooks' files, which show what each Claude is doing straight away; when the window is closed, everything shows as not running.
+The menu bar shows Hangar's icon, how many Claudes are waiting on you or working, and failing CI. Each chat, ticket and review in the menu says when its CI is failing or still running (a review's failing CI isn't counted in the menu bar). The menu lists every chat, ticket and review by what its Claude is doing, with each ticket's PRs; clicking one opens it in the Hangar window of the editor it runs in. It reads `~/.cache/hangar/status.json`, which the Hangar window writes with each scan (every 10 seconds, or every 60 while it's in the background and no Claude is working), and the hooks' files, which show what each Claude is doing straight away; when the window is closed, everything shows as not running.
 
 ## Links
 
@@ -54,6 +55,7 @@ Each Claude starts with a short note on its chat or ticket, appended to its syst
 | --- | --- |
 | `~/.claude/settings.json` | The agent status hooks, after you say yes. |
 | `~/.cache/hangar/chats/<id>.json` | One per chat: `id`, `title`, `root` (the project it's listed under), `cwd` (where its Claude runs, if not `root`), `session` (the conversation to resume), `at`. |
+| `~/.cache/hangar/reviews/<repo>#<number>.json` | One per review: `id`, `root`, `repo`, `repoDir`, `number`, `title`, `url`, `base`, `author`, `branch`, `dir` (its worktree), `at`. |
 | `~/.cache/hangar/drafts/` | Tickets that have no worktrees yet, and the branches a ticket or chat holds that don't carry its name. |
 | `~/.cache/hangar/agents/` | What each Claude is doing, written by the hook. |
 | `~/.cache/hangar/requests/` | Links (`<scheme>://panopticonism.hangar/{open,diff}?ticket=…`) handed to the Hangar window. |
@@ -62,7 +64,7 @@ Each Claude starts with a short note on its chat or ticket, appended to its syst
 | `~/.local/share/hangar/` | The Hangar window's workspace file, the hook script, the menu bar icon and `link-key` (see Links). |
 | `~/.claude/projects/` | Read for each conversation's title; a chat's conversation is moved within it when the chat becomes a ticket. |
 | SwiftBar's plugin folder | `hangar.5s.js` (only with `hangar.menuBar` on). |
-| Your repos | Worktrees, created and removed only when you ask (*Add repo to ticket…*, *Remove merged worktree*) or by Claude for its ticket. |
+| Your repos | Worktrees, created and removed only when you ask (*Add repo to ticket…*, *Remove merged worktree*, *New review…*, *Remove review*) or by Claude for its ticket. |
 
 It sends nothing anywhere itself: network access is `git fetch` and `gh`, with your own credentials.
 

@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.3.1
+
+- *New review…* with a link to a PR in a repo the project doesn't have offers to clone it (with `gh repo clone`, into the project's folder of repos, or `repos/` in a meta-repo), then carries on with the review.
+- Removing a project from Hangar takes it out of the panel straight away, even when it has no chats, tickets or reviews. Before, it stayed until something else in the panel changed.
+- When the chat, ticket or review the Hangar window is on is removed outside Hangar (its worktrees deleted, say), the window lets go of it: its folders leave the window, so the editor no longer complains about folders that aren't there, and the status bar stops naming it.
+
 ## 3.3.0
 
 - A **Reviews** section, next to Chats and Tickets, for reviewing other people's pull requests. *New review…* (the + on Reviews, or right-click a project) takes the PR's number or its GitHub link, checks the PR out with `gh pr checkout` in a worktree of its own next to its repo (`<repo>.worktrees/review-pr-<number>`, on a branch named after the PR's title, like `review/fix-login-redirect`, PRs from forks too), and starts a Claude there that reviews it straight away. It works in the background: the window stays where it is, and a notice says when Claude has finished. Click the review to switch to it and read what it found.

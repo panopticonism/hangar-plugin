@@ -861,7 +861,8 @@ class Tree {
   // its status counts by what the row says, not by when it was last reported.
   refresh() {
     const shown = JSON.stringify({
-      activeTicket, removing: [...removing], drafts, colorOf,
+      // The projects too: one added or removed with nothing in it changes nothing else here
+      projects: projects(), activeTicket, removing: [...removing], drafts, colorOf,
       agents: Object.entries(agents).map(([name, a]) => [name, a.state, a.session, since(a.at)]),
       watching,
       chats: Object.values(chats).map((c) => [c.id, c.title, worktreesOf(`chat:${c.id}`).map((w) => [w.id, w.branch, w.local, w.pr])]),
@@ -1269,7 +1270,17 @@ function windowFolders(name, t) {
 function syncFolders() {
   if (!isHangarWindow() || !activeTicket) return;
   const t = threadOf(activeTicket);
-  if (!t) return;
+  // What the window was on is gone (removed outside Hangar, or its last worktree went): the window
+  // lets go of it and of its folders, so none it shows are missing
+  if (!t) {
+    activeTicket = null;
+    context.workspaceState.update('hangar.activeTicket', null);
+    const extra = (vscode.workspace.workspaceFolders || []).length - 1;
+    if (extra > 0) vscode.workspace.updateWorkspaceFolders(1, extra);
+    tree.refresh();
+    updateStatusBar();
+    return;
+  }
   const wanted = windowFolders(activeTicket, t);
   const current = (vscode.workspace.workspaceFolders || []).slice(1);
   const same = current.length === wanted.length && current.every((f, i) => f.uri.fsPath === wanted[i].uri.fsPath && f.name === wanted[i].name);
@@ -1820,7 +1831,8 @@ function parsePRInput(v) {
   if (m) return { number: Number(m[1]) };
   // A link to one of its tabs (…/pull/42/files) is the PR's link
   m = v.match(/^(https?:\/\/[^/\s]+\/([^/\s]+)\/([^/\s]+)\/pull\/(\d+))(?:[/?#]\S*)?$/);
-  return m ? { owner: m[2].toLowerCase(), name: m[3].toLowerCase(), number: Number(m[4]), url: m[1] } : null;
+  return m ? { owner: m[2].toLowerCase(), name: m[3].toLowerCase(), number: Number(m[4]), url: m[1],
+    repoUrl: m[1].replace(/\/pull\/\d+$/, ''), repoName: m[3] } : null;
 }
 
 // The owner/name of each GitHub repo a local repo has as a remote
@@ -1836,6 +1848,40 @@ function reviewBranchName(pr) {
   let s = slug(pr.title);
   if (s.length > 50) s = s.slice(0, 51).includes('-') ? s.slice(0, 51).replace(/-[^-]*$/, '') : s.slice(0, 50);
   return `review/${s.replace(/-+$/, '') || `pr-${pr.number}`}`;
+}
+
+// Where a repo cloned for a project goes: next to its repos in a folder of repos, or in repos/ in a
+// meta-repo. A project that's a single repo has nowhere for another one (null).
+function cloneTarget(root, name) {
+  if (!isRepo(root)) return path.join(root, name);
+  return fs.existsSync(path.join(root, 'repos')) ? path.join(root, 'repos', name) : null;
+}
+
+// A PR link to a repo the project doesn't have: offers to clone it there (with gh, so private repos
+// work), and gives the repo's name in the project once it's cloned
+async function offerClone(root, want) {
+  const target = cloneTarget(root, want.repoName);
+  const what = `${want.owner}/${want.name}`;
+  if (!target) {
+    vscode.window.showWarningMessage(`None of the repos in ${projectName(root)} has ${what} as a remote, and ${projectName(root)} is a single repo, so there's nowhere to clone it. Add a project that holds it, then try again.`);
+    return null;
+  }
+  if (fs.existsSync(target)) {
+    vscode.window.showWarningMessage(`${projectName(root)} has no clone of ${what}, and ${target.replace(HOME, '~')} is already taken by something else, so it can't be cloned there.`);
+    return null;
+  }
+  const ok = await vscode.window.showInformationMessage(`${projectName(root)} has no clone of ${what}. Clone it to review the PR?`,
+    { modal: true, detail: `Clones ${want.repoUrl} into ${target.replace(HOME, '~')} with gh repo clone, then checks the PR out in a worktree next to it.` }, 'Clone');
+  if (ok !== 'Clone') return null;
+  try {
+    await inPanel('hangar.panel', `Cloning ${what}…`, () => run('gh', ['repo', 'clone', want.repoUrl, target], { env: { ...ENV, GH_PROMPT_DISABLED: '1' } }));
+  } catch (err) {
+    vscode.window.showErrorMessage(`Couldn't clone ${what}: ${String(err.stderr || err.message).trim().split('\n').pop()}`);
+    return null;
+  }
+  reposAt = 0;
+  findRepos();
+  return [...reposIn(root)].find(([, dir]) => dir === target)?.[0] || null;
 }
 
 // A review: the PR checked out in a worktree of its own, next to the repo
@@ -1855,7 +1901,7 @@ async function newReview(el) {
   const want = parsePRInput(input);
   findRepos();
   const names = repoNames(root);
-  if (!names.length) {
+  if (!names.length && !want.url) {
     vscode.window.showWarningMessage(`${projectName(root)} has no git repos to check a PR out in.`);
     return;
   }
@@ -1863,11 +1909,8 @@ async function newReview(el) {
   let repo;
   if (want.url) {
     const slugs = await Promise.all(names.map((r) => remoteSlugs(repoDir(r, root))));
-    repo = names.find((r, i) => slugs[i].has(`${want.owner}/${want.name}`));
-    if (!repo) {
-      vscode.window.showWarningMessage(`None of the repos in ${projectName(root)} has ${want.owner}/${want.name} as a remote, so there's nowhere to check that PR out.`);
-      return;
-    }
+    repo = names.find((r, i) => slugs[i].has(`${want.owner}/${want.name}`)) || await offerClone(root, want);
+    if (!repo) return;
   } else {
     repo = names.length === 1 ? names[0]
       : (await vscode.window.showQuickPick(names, { placeHolder: `Which repo is PR #${want.number} in?` }));

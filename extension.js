@@ -1771,36 +1771,71 @@ async function newChat(el) {
 // Claude Code writes one itself) in the prompt of the Claude it's for: the ticket, chat or review whose
 // worktree or folder the file is in, else the one this window is on. Typed into its terminal, so it
 // works whether or not that Claude is connected to the editor.
-async function sendSelection() {
-  const ed = vscode.window.activeTextEditor;
-  if (!ed || ed.document.uri.scheme !== 'file') return;
-  const file = ed.document.uri.fsPath;
+// Whose Claude a selection goes to: the thread whose worktree holds the file, or else the one this
+// window is on. The old side of a Hangar diff is a hangar-base document of the same path at a commit.
+function selectionTarget(doc) {
+  let file, ref = null;
+  if (doc.uri.scheme === 'file') file = doc.uri.fsPath;
+  else if (doc.uri.scheme === 'hangar-base') {
+    const q = new URLSearchParams(doc.uri.query);
+    file = path.join(q.get('dir'), q.get('p'));
+    ref = q.get('ref');
+  } else return null;
   const inside = (dir) => dir && (file === dir || file.startsWith(dir.endsWith('/') ? dir : dir + '/'));
   const owner = [...worktrees.values()].filter((w) => inside(w.dir)).sort((a, b) => b.dir.length - a.dir.length)[0]?.ticket;
   const name = owner || activeTicket;
-  if (!name || !threadOf(name)) {
+  if (!name || !threadOf(name)) return null;
+  const cwd = cwdOf(name);
+  return { name, rel: inside(cwd) ? path.relative(cwd, file) : file, ref };
+}
+
+async function sendSelection(uri, range) {
+  const ed = vscode.window.activeTextEditor;
+  const doc = uri ? vscode.workspace.textDocuments.find((d) => d.uri.toString() === uri.toString()) : ed?.document;
+  if (!doc) return;
+  const t = selectionTarget(doc);
+  if (!t) {
     vscode.window.showInformationMessage("This file isn't in a ticket, chat or review's worktree, and this window isn't on one.");
     return;
   }
-  const term = claudeTerminalFor(name);
+  const term = claudeTerminalFor(t.name);
   if (!term) {
-    const pick = await vscode.window.showInformationMessage(`${displayName(name)}'s Claude isn't running.`, 'Start it');
-    if (pick) claude(name).show(false);
+    const pick = await vscode.window.showInformationMessage(`${displayName(t.name)}'s Claude isn't running.`, 'Start it');
+    if (pick) claude(t.name).show(false);
     return;
   }
-  const cwd = cwdOf(name);
-  const rel = inside(cwd) ? path.relative(cwd, file) : file;
-  const sel = ed.selection;
-  let ref = rel;
-  if (!sel.isEmpty) {
+  const sel = range || (ed?.document === doc ? ed.selection : null);
+  let ref = t.rel;
+  if (sel && !sel.isEmpty) {
     const start = sel.start.line + 1;
     // A selection that ends at the start of a line doesn't take that line
     const end = sel.end.character === 0 && sel.end.line > sel.start.line ? sel.end.line : sel.end.line + 1;
     ref += start === end ? `#L${start}` : `#L${start}-${end}`;
   }
-  // A path with spaces is quoted, as Claude Code's own @-mentions are
-  term.sendText(`${/\s/.test(ref) ? `@"${ref}"` : `@${ref}`} `, false);
+  // A path with spaces is quoted, as Claude Code's own @-mentions are; lines from a diff's old side
+  // are the file's at that commit, not as it is now
+  term.sendText(`${/\s/.test(ref) ? `@"${ref}"` : `@${ref}`} ${t.ref ? `(as of ${t.ref.slice(0, 7)}) ` : ''}`, false);
   term.show(false);
+}
+
+let canSend;
+function updateCanSend() {
+  const ed = vscode.window.activeTextEditor;
+  const v = !!ed && !ed.selection.isEmpty && !!selectionTarget(ed.document);
+  if (v !== canSend) vscode.commands.executeCommand('setContext', 'hangar.canSend', canSend = v);
+}
+
+// "Add to Claude" in the lightbulb, ⌘. and the Quick Fix… of the editor's selection widget, which
+// extensions can't add to otherwise
+class SelectionActions {
+  provideCodeActions(doc, range) {
+    if (range.isEmpty) return [];
+    const t = selectionTarget(doc);
+    if (!t) return [];
+    const a = new vscode.CodeAction(`Add to Claude (${displayName(t.name)})`, vscode.CodeActionKind.QuickFix);
+    a.command = { command: 'hangar.sendSelection', title: a.title, arguments: [doc.uri, range] };
+    return [a];
+  }
 }
 
 // Interrupts what a ticket's or chat's Claude is doing, like pressing Esc in it
@@ -2001,18 +2036,24 @@ async function newReview(el) {
   if (pick) await openTicket(name);
 }
 
-// Removes a review: its Claude, its worktree and its local branch. Never forced, so a worktree with
-// changes in it stays (and so does the review). The conversation stays in Claude's history.
+// Removes a review: its Claude, its worktree and its local branch. Changes in the worktree are named
+// in the confirmation and discarded only once it's confirmed. The conversation stays in Claude's history.
 async function removeReview(id) {
   const r = reviews[id];
   if (!r) return;
   const name = `review:${id}`;
   const w = worktreesOf(name)[0];
   const pr = w?.pr;
+  // A review's Claude running the tests often leaves changes behind (generated files, a lockfile):
+  // they're listed, and removing the review discards them
+  let changes = [];
+  if (w) try { changes = (await git(w.dir, ['status', '--porcelain'])).split('\n').filter(Boolean); } catch {}
+  const shown = changes.slice(0, 8).map((l) => `  ${l}`).join('\n') + (changes.length > 8 ? `\n  …and ${changes.length - 8} more` : '');
+  const action = changes.length ? 'Remove and discard changes' : 'Remove';
   const ok = await vscode.window.showWarningMessage(`Remove the review of ${r.repo} #${r.number}?`,
-    { modal: true, detail: `${pr && !openPR(pr) ? `PR #${r.number} is ${pr.state.toLowerCase()}. ` : ''}Closes its Claude and deletes its worktree${w ? ` (${w.dir})` : ''} and local branch ${r.branch}. Its conversation stays in Claude's history (claude --resume). Never forced: a worktree with changes in it is kept.` },
-    'Remove');
-  if (ok !== 'Remove') return;
+    { modal: true, detail: `${pr && !openPR(pr) ? `PR #${r.number} is ${pr.state.toLowerCase()}. ` : ''}Closes its Claude and deletes its worktree${w ? ` (${w.dir})` : ''} and local branch ${r.branch}. Its conversation stays in Claude's history (claude --resume).${changes.length ? `\n\nIts worktree has changes, which will be lost:\n${shown}` : ''}` },
+    action);
+  if (ok !== action) return;
   claudeTerminalFor(name)?.dispose();
   if (w) {
     const folders = vscode.workspace.workspaceFolders || [];
@@ -2023,7 +2064,7 @@ async function removeReview(id) {
   }
   try {
     await inPanel('hangar.panel', `Removing the review of ${r.repo} #${r.number}…`, async () => {
-      if (w) await git(r.repoDir, ['worktree', 'remove', w.dir]);
+      if (w) await git(r.repoDir, ['worktree', 'remove', ...(changes.length ? ['--force'] : []), w.dir]);
       else await git(r.repoDir, ['worktree', 'prune']).catch(() => {});
       await git(r.repoDir, ['branch', '-D', r.branch]).catch(() => {});
     });
@@ -2687,7 +2728,11 @@ function activate(ctx) {
     vscode.commands.registerCommand('hangar.forgetDraft', (el) => forgetDraft(el.name)),
     vscode.commands.registerCommand('hangar.newChat', (el) => newChat(el)),
     vscode.commands.registerCommand('hangar.newReview', (el) => newReview(el)),
-    vscode.commands.registerCommand('hangar.sendSelection', () => sendSelection()),
+    vscode.commands.registerCommand('hangar.sendSelection', (uri, range) => sendSelection(uri instanceof vscode.Uri ? uri : undefined, range)),
+    vscode.languages.registerCodeActionsProvider([{ scheme: 'file' }, { scheme: 'hangar-base' }], new SelectionActions()),
+    // ⌘L adds a selection only in a file that has a Claude to add it to; elsewhere it stays the editor's
+    vscode.window.onDidChangeActiveTextEditor(updateCanSend),
+    vscode.window.onDidChangeTextEditorSelection((e) => { if (e.textEditor === vscode.window.activeTextEditor) updateCanSend(); }),
     vscode.commands.registerCommand('hangar.openThisReview', (el) => openTicket(el.name)),
     vscode.commands.registerCommand('hangar.removeReview', (el) => removeReview(reviewId(el.name))),
     vscode.commands.registerCommand('hangar.stopClaude', (el) => stopClaude(el.name || `chat:${el.id}`)),

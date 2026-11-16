@@ -1,5 +1,11 @@
 # Changelog
 
+## 3.4.0
+
+- *Remove review* on a review whose worktree has changes (often left by its Claude running the tests: a regenerated file, a lockfile) lists them and offers *Remove and discard changes*. Before, it said removal was never forced and then failed with git's error, keeping the review.
+- *Add selection to Claude* works in Hangar's diffs, on both sides. A selection from the old side is marked with the commit it's from, like `@src/app.ts#L5-12 (as of 1a2b3c4)`, since its line numbers aren't the file's as it is now. Before, it was missing from the right-click menu in a diff, and did nothing on the old side.
+- *Add selection to Claude* also has a shortcut, ⌘L, as in other editors' chats (only with text selected in a file that has a Claude to add it to; elsewhere ⌘L still selects the line), and shows up as a quick fix (the lightbulb, ⌘., and *Quick Fix…* in the editor's selection toolbar) when the selected file belongs to a chat, ticket or review. The editor's own *Add to Chat* button goes to the editor's built-in chat, and extensions can't add to it or replace it. The old side of a diff is read-only, and the editor offers no quick fixes there, so use the right-click menu or the shortcut.
+
 ## 3.3.3
 
 - The Hangar window's workspace for each root lives in the root itself, in `<root>/.hangar/` (with a `.gitignore`, and hidden in the Explorer and search). In 3.3.2 it was in `~/.local/share/hangar/workspaces/`, where the editor treated each one as untrusted: opening a ticket or chat from a trusted folder switched to a workspace in Restricted Mode, where Hangar doesn't run.

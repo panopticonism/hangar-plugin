@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.4.1
+
+- A new review shows as loading (a spinner and *checking out the PR…*) until its PR is checked out and its Claude started, with nothing under it until then; then its Claude and branch appear together.
+- A new review's worktree no longer shows up under Tickets, as a detached HEAD, while its PR is being checked out. The review is recorded before its worktree is made, so the worktree is the review's from the start; if the checkout fails, the record goes with it.
+
 ## 3.4.0
 
 - *Remove review* on a review whose worktree has changes (often left by its Claude running the tests: a regenerated file, a lockfile) lists them and offers *Remove and discard changes*. Before, it said removal was never forced and then failed with git's error, keeping the review.

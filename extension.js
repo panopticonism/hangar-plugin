@@ -455,6 +455,8 @@ let reviews = {};
 const isReview = (name) => String(name).startsWith('review:');
 const reviewId = (name) => String(name).slice(7);
 const reviewFile = (id) => path.join(REVIEWS_DIR, `${id}.json`);
+// Reviews being set up by New review…: shown loading, with nothing under them, until they're ready
+const settingUp = new Set();
 function readReviews() {
   const next = {};
   for (const f of jsonFiles(REVIEWS_DIR)) {
@@ -908,6 +910,7 @@ class Tree {
     }
     // A review: its Claude, then the PR's branch with the PR under it (the repo is on the review's row)
     if (el.kind === 'review') {
+      if (settingUp.has(reviewId(el.name))) return [];
       const wts = worktreesOf(el.name);
       return [{ kind: 'agent', name: el.name },
         ...(wts.length ? wts.map((w) => ({ kind: 'branch', id: w.id, ticket: el.name })) : [{ kind: 'nowt', name: el.name }])];
@@ -1008,6 +1011,16 @@ class Tree {
 
   reviewItem(r) {
     const name = `review:${r.id}`;
+    // Until its PR is checked out and its Claude started, a new review is just a spinner
+    if (settingUp.has(r.id)) {
+      const item = new vscode.TreeItem(`${r.repo} #${r.number}`, vscode.TreeItemCollapsibleState.None);
+      item.id = `${name}#setup`;
+      item.contextValue = 'reviewSettingUp';
+      item.description = ['checking out the PR…', r.title].filter(Boolean).join(' · ');
+      item.iconPath = new vscode.ThemeIcon('loading~spin');
+      item.tooltip = `${r.repo} #${r.number}: ${r.title || ''}\n${r.url}\nChecking out the PR in a worktree of its own`;
+      return item;
+    }
     const wts = worktreesOf(name);
     const pr = wts[0]?.pr;
     const active = name === activeTicket;
@@ -2013,25 +2026,38 @@ async function newReview(el) {
       vscode.window.showWarningMessage(`${target} already exists, so the review's worktree can't go there. Move or delete it, then try again.`);
       return null;
     }
+    // The record comes first, so the worktree is the review's from the start: checked out detached
+    // until gh moves it to the PR's branch, it would otherwise show under Tickets in between
+    const record = reviewFile(id);
+    settingUp.add(id);
+    fs.mkdirSync(REVIEWS_DIR, { recursive: true });
+    writeJson(record, { id, root, repo, repoDir: dir, number: pr.number, title: pr.title, url: pr.url,
+      base: pr.baseRefName, author: pr.author?.login || '', branch, dir: target, at: Math.floor(Date.now() / 1000) });
+    readReviews();
+    const undo = () => { settingUp.delete(id); try { fs.unlinkSync(record); } catch {} readReviews(); tree.refresh(); };
     try {
       await git(dir, ['worktree', 'add', '--detach', target]);
-    } catch (err) { failed('git worktree add failed', err); return null; }
+    } catch (err) { undo(); failed('git worktree add failed', err); return null; }
     try {
       await gh(['pr', 'checkout', pr.url, '--branch', branch], target);
     } catch (err) {
       await git(dir, ['worktree', 'remove', '--force', target]).catch(() => {});
+      undo();
       failed('gh pr checkout failed', err);
       return null;
     }
-    fs.mkdirSync(REVIEWS_DIR, { recursive: true });
-    writeJson(reviewFile(id), { id, root, repo, repoDir: dir, number: pr.number, title: pr.title, url: pr.url,
-      base: pr.baseRefName, author: pr.author?.login || '', branch, dir: target, at: Math.floor(Date.now() / 1000) });
     readReviews();
     await poll();
     return true;
-  });
-  if (!made) return;
+  }).catch((err) => { failed('New review failed', err); return null; });
+  if (!made) {
+    if (settingUp.delete(id)) tree.refresh();
+    return;
+  }
+  // The review stays loading until its Claude is started, so the row it ends up with is the ready one
   claude(name);
+  settingUp.delete(id);
+  tree.refresh();
   const pick = await vscode.window.showInformationMessage(`Claude is reviewing ${repo} #${want.number} in the background. You'll be told when it's done.`, 'Show');
   if (pick) await openTicket(name);
 }

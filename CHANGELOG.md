@@ -1,5 +1,9 @@
 # Changelog
 
+## 3.4.2
+
+- A worktree on no branch (a detached HEAD, as Claude desktop makes them) has a remove button, like a merged one. It says what would be lost first: uncommitted changes, and commits no branch, tag or remote has. If there are any, the button is *Remove and discard*. *Remove merged worktree* is now just *Remove worktree*, since it covers both.
+
 ## 3.4.1
 
 - A new review shows as loading (a spinner and *checking out the PR…*) until its PR is checked out and its Claude started, with nothing under it until then; then its Claude and branch appear together.

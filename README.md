@@ -67,7 +67,7 @@ Each Claude starts with a short note on its chat or ticket, appended to its syst
 | `<root>/.hangar/` | The Hangar window's workspace for that root folder (one per root, so changing the root never overwrites another's; inside the root so it's trusted whenever the root is), with a `.gitignore` so git never sees it. Hidden in the Hangar window's Explorer and search. |
 | `~/.claude/projects/` | Read for each conversation's title; a chat's conversation is moved within it when the chat becomes a ticket. |
 | SwiftBar's plugin folder | `hangar.5s.js` (only with `hangar.menuBar` on). |
-| Your repos | Worktrees, created and removed only when you ask (*Add repo to ticket…*, *Remove merged worktree*, *New review…*, *Remove review*) or by Claude for its ticket. |
+| Your repos | Worktrees, created and removed only when you ask (*Add repo to ticket…*, *Remove worktree*, *New review…*, *Remove review*) or by Claude for its ticket. |
 
 It sends nothing anywhere itself: network access is `git fetch` and `gh`, with your own credentials.
 

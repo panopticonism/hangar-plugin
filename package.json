@@ -2,7 +2,7 @@
 	"name": "hangar",
 	"displayName": "Hangar",
 	"description": "Claude Code chats, tickets and PR reviews in your sidebar, each with its own Claude, every git worktree grouped by ticket with its branch, PR and CI, one window that switches between them, and live multi-file diffs. macOS.",
-	"version": "3.4.1",
+	"version": "3.4.2",
 	"publisher": "panopticonism",
 	"license": "MIT",
 	"repository": {
@@ -154,7 +154,7 @@
 			},
 			{
 				"command": "hangar.removeWorktree",
-				"title": "Remove merged worktree",
+				"title": "Remove worktree",
 				"category": "Hangar",
 				"icon": "$(trash)"
 			},

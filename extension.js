@@ -1197,7 +1197,9 @@ class Tree {
 }
 
 // A worktree's branch row: which actions it gets
-const isRemovable = (w) => ['MERGED', 'CLOSED'].includes(w.pr?.state) && !w.local?.dirty && !w.local?.ahead;
+// A worktree on no branch (as Claude desktop makes them) can be removed any time: Remove says what it would lose
+const isDetached = (w) => w.branch === '(detached)';
+const isRemovable = (w) => isDetached(w) || (['MERGED', 'CLOSED'].includes(w.pr?.state) && !w.local?.dirty && !w.local?.ahead);
 // A review's worktree goes with the review (Remove review), and isn't moved to a ticket
 function worktreeContext(w) {
   if (isReview(w.ticket)) return `worktree${w.pr?.url ? '.pr' : ''}.review`;
@@ -2637,6 +2639,7 @@ async function copy(text, what) {
 }
 
 async function removeWorktree(w) {
+  if (isDetached(w)) return removeDetached(w);
   const ok = await vscode.window.showWarningMessage(
     `Remove the worktree ${w.id} and its local branch ${w.branch}?`,
     { modal: true, detail: `PR #${w.pr?.number} is ${w.pr?.state.toLowerCase()} and the worktree has nothing uncommitted or unpushed. Never forced.` },
@@ -2661,6 +2664,45 @@ async function removeWorktree(w) {
     ticketsMemo = null;
   } catch (err) {
     vscode.window.showErrorMessage(`${worktreeTool('remove')} failed: ${String(err.stderr || err.message).trim().split('\n').pop()}`);
+  } finally {
+    removing.delete(w.id);
+  }
+  await poll();
+}
+
+// A worktree on no branch: its changes, and commits no branch or tag has, are listed and go with it
+async function removeDetached(w) {
+  let changes = [];
+  let lost = [];
+  try { changes = (await git(w.dir, ['status', '--porcelain'])).split('\n').filter(Boolean); } catch {}
+  try { lost = (await git(w.dir, ['log', '--oneline', 'HEAD', '--not', '--branches', '--tags', '--remotes'])).split('\n').filter(Boolean); } catch {}
+  const list = (lines) => lines.slice(0, 8).map((l) => `  ${l}`).join('\n') + (lines.length > 8 ? `\n  …and ${lines.length - 8} more` : '');
+  let head = '';
+  try { head = (await git(w.dir, ['log', '-1', '--format=%h %s'])).trim(); } catch {}
+  const losing = changes.length || lost.length;
+  const action = losing ? 'Remove and discard' : 'Remove';
+  const ok = await vscode.window.showWarningMessage(`Remove the detached worktree ${w.dir.replace(HOME, '~')}?`, {
+    modal: true,
+    detail: [
+      `It's on no branch${head ? `, at ${head}` : ''}.`,
+      changes.length ? `Its changes will be lost:\n${list(changes)}` : '',
+      lost.length ? `Commits on no branch, which will be lost:\n${list(lost)}` : '',
+      losing ? '' : 'Nothing in it is uncommitted, and its commit is on a branch, so nothing is lost.',
+    ].filter(Boolean).join('\n\n'),
+  }, action);
+  if (ok !== action) return;
+  const folders = vscode.workspace.workspaceFolders || [];
+  const idx = folders.findIndex((f) => f.uri.fsPath === w.dir);
+  if (idx > 0) vscode.workspace.updateWorkspaceFolders(idx, 1);
+  removing.add(w.id);
+  tree.refresh();
+  try {
+    await inPanel('hangar.panel', `Removing the detached worktree ${path.basename(w.dir)}…`, () =>
+      git(w.repoDir, ['worktree', 'remove', ...(changes.length ? ['--force'] : []), w.dir]));
+    worktrees.delete(w.id);
+    ticketsMemo = null;
+  } catch (err) {
+    vscode.window.showErrorMessage(`git worktree remove failed: ${String(err.stderr || err.message).trim().split('\n').pop()}`);
   } finally {
     removing.delete(w.id);
   }
